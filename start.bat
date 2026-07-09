@@ -1,0 +1,1 @@
+.\gradlew.bat :app:run "-Dskiko.renderApi=SOFTWARE"
