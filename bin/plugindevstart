@@ -1,0 +1,66 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# plugindevstart — start the Plugin Dev Studio localhost service reliably.
+# Idempotent: does nothing if already running. Waits until healthy.
+set -u
+
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+BASE="$(cd "$(dirname "$SELF")/.." && pwd)"
+APP_DIR="$BASE/web/build/install/web"
+PIDFILE="$BASE/.plugindev.pid"
+LOGFILE="$BASE/plugindev.log"
+PORT="${PLUGINDEV_PORT:-8080}"
+HEALTH="http://localhost:$PORT/api/health"
+
+log() { echo "[plugindev] $*"; }
+
+healthy() {
+  curl -s -m 2 -o /dev/null -w '%{http_code}' "$HEALTH" 2>/dev/null | grep -q '^200$'
+}
+
+# Already running?
+if [ -f "$PIDFILE" ]; then
+  PID=$(cat "$PIDFILE")
+  if kill -0 "$PID" 2>/dev/null && healthy; then
+    log "already running (pid $PID) — http://localhost:$PORT/"
+    exit 0
+  fi
+fi
+
+if healthy; then
+  log "a service already answers on port $PORT but was not started by us — leaving it alone."
+  log "open http://localhost:$PORT/"
+  exit 0
+fi
+
+# Build if not installed yet.
+if [ ! -x "$APP_DIR/bin/web" ]; then
+  log "first run: building web service (this can take a few minutes) …"
+  (cd "$BASE" && sh gradlew :web:installDist --no-daemon >"$LOGFILE" 2>&1) || {
+    log "build failed — see $LOGFILE"; exit 1; }
+fi
+
+log "starting service …"
+cd "$BASE" || exit 1
+setsid nohup "$APP_DIR/bin/web" </dev/null >>"$LOGFILE" 2>&1 &
+NEW_PID=$!
+echo "$NEW_PID" > "$PIDFILE"
+
+# Wait for health (max 60s).
+i=0
+while [ $i -lt 60 ]; do
+  if healthy; then
+    log "ready — open http://localhost:$PORT/  (pid $NEW_PID, log: $LOGFILE)"
+    exit 0
+  fi
+  if ! kill -0 "$NEW_PID" 2>/dev/null; then
+    log "process died during startup — last log lines:"
+    tail -5 "$LOGFILE"
+    rm -f "$PIDFILE"
+    exit 1
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+
+log "service did not become healthy within 60s — check $LOGFILE"
+exit 1

@@ -1,0 +1,61 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# plugindevstop — stop the Plugin Dev Studio localhost service cleanly.
+set -u
+
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+BASE="$(cd "$(dirname "$SELF")/.." && pwd)"
+PIDFILE="$BASE/.plugindev.pid"
+PORT="${PLUGINDEV_PORT:-8080}"
+HEALTH="http://localhost:$PORT/api/health"
+
+log() { echo "[plugindev] $*"; }
+
+stopped() { ! curl -s -m 2 -o /dev/null "$HEALTH" 2>/dev/null; }
+
+kill_pid() {
+  PID="$1"
+  kill "$PID" 2>/dev/null
+  i=0
+  while [ $i -lt 20 ]; do
+    kill -0 "$PID" 2>/dev/null || return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  log "pid $PID did not exit, sending SIGKILL"
+  kill -9 "$PID" 2>/dev/null
+  sleep 1
+}
+
+DID_STOP=0
+
+if [ -f "$PIDFILE" ]; then
+  PID=$(cat "$PIDFILE")
+  if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    log "stopping pid $PID …"
+    kill_pid "$PID"
+    DID_STOP=1
+  fi
+  rm -f "$PIDFILE"
+fi
+
+# Fallback: catch any stray instance (pattern assembled to avoid matching this script).
+PATTERN='pluginstudio\.web\.Mai'"nKt"
+for PID in $(pgrep -f "$PATTERN" 2>/dev/null); do
+  [ "$PID" = "$$" ] && continue
+  log "stray process found: $PID — stopping"
+  kill_pid "$PID"
+  DID_STOP=1
+done
+
+if stopped; then
+  log "stopped. port $PORT is free."
+  exit 0
+fi
+
+if [ "$DID_STOP" = "0" ]; then
+  log "service was not running."
+  exit 0
+fi
+
+log "warning: something still answers on port $PORT"
+exit 1

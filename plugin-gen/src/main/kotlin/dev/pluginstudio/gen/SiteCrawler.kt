@@ -1,0 +1,207 @@
+package dev.pluginstudio.gen
+
+import dev.pluginstudio.analyzer.DomAnalyzer
+import dev.pluginstudio.analyzer.SiteAnalyzer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+
+/**
+ * Builds a multi-page corpus (home / search / book / chapter) using normal
+ * HTTP access. Protected sites that return a Cloudflare challenge are reported
+ * so the caller can fall back to the browser-assisted capture flow.
+ */
+class SiteCrawler(
+    private val fetcher: HttpFetcher = HttpFetcher(),
+    private val domAnalyzer: DomAnalyzer = DomAnalyzer(),
+    private val siteAnalyzer: SiteAnalyzer = SiteAnalyzer()
+) {
+    data class CrawlResult(
+        val success: Boolean,
+        val blocked: Boolean = false,
+        val error: String? = null,
+        val baseUrl: String = "",
+        val pages: List<PageSnapshot> = emptyList()
+    )
+
+    suspend fun crawl(
+        seedUrl: String,
+        searchQuery: String,
+        onStep: (String) -> Unit = {}
+    ): CrawlResult = withContext(Dispatchers.IO) {
+        val base = baseUrlOf(seedUrl)
+        if (base.isBlank()) return@withContext CrawlResult(false, error = "Invalid URL")
+
+        // ── 1. home ──
+        onStep("Fetching home page …")
+        val homeResp = fetcher.get(seedUrl)
+        if (!homeResp.ok) {
+            val why = if (homeResp.blocked) "blocked by bot protection (Cloudflare challenge)" else "HTTP ${homeResp.status}"
+            return@withContext CrawlResult(false, blocked = homeResp.blocked, error = "Home page $why", baseUrl = base)
+        }
+        // Normalize to the final post-redirect URL (e.g. non-www → www)
+        // so the generated plugin never depends on redirect behaviour.
+        val homeUrl = homeResp.finalUrl.ifBlank { seedUrl }
+        val effectiveBase = baseUrlOf(homeUrl).ifBlank { base }
+        val homeDoc = Jsoup.parse(homeResp.body, homeUrl)
+        val pages = mutableListOf(snapshot(homeUrl, homeResp.body, "home", homeDoc))
+        onStep("Home page OK (${homeResp.body.length} bytes) → $effectiveBase")
+
+        // ── 2. book page ──
+        onStep("Looking for a book/novel link …")
+        val bookLinks = findBookLinks(homeDoc, base)
+        var bookSnap: PageSnapshot? = null
+        for (link in bookLinks.take(3)) {
+            val r = fetcher.get(link)
+            if (!r.ok || r.blocked) continue
+            val doc = Jsoup.parse(r.body, link)
+            val snap = snapshot(link, r.body, "book", doc)
+            pages.add(snap)
+            if (hasChapterLinks(doc)) { bookSnap = snap; break }
+            if (bookSnap == null) bookSnap = snap
+        }
+        onStep(if (bookSnap != null) "Book page captured: ${bookSnap.url}" else "No book page found from home links")
+
+        // ── 3. chapter page ──
+        var chapterSnap: PageSnapshot? = null
+        if (bookSnap != null) {
+            onStep("Following a chapter link …")
+            val chLink = firstChapterLink(Jsoup.parse(bookSnap.html, bookSnap.url), bookSnap.url)
+            if (chLink != null) {
+                val r = fetcher.get(chLink)
+                if (r.ok && !r.blocked) {
+                    chapterSnap = snapshot(chLink, r.body, "chapter", Jsoup.parse(r.body, chLink))
+                    pages.add(chapterSnap)
+                    onStep("Chapter page captured: $chLink")
+                } else onStep("Chapter fetch failed (${r.status})")
+            } else onStep("No chapter link found on the book page")
+        }
+
+        // ── 4. search results page ──
+        onStep("Probing search …")
+        val searchUrl = discoverSearchUrl(homeDoc, base, searchQuery)
+        if (searchUrl != null) {
+            val r = fetcher.get(searchUrl)
+            if (r.ok && !r.blocked) {
+                val doc = Jsoup.parse(r.body, searchUrl)
+                if (countBookishLinks(doc) >= 2 || looksLikeResults(doc, searchQuery)) {
+                    pages.add(snapshot(searchUrl, r.body, "search", doc))
+                    onStep("Search results captured: $searchUrl")
+                } else onStep("Search URL returned no results — will still probe JSON APIs")
+            } else onStep("Search fetch failed (${r.status})")
+        } else onStep("No obvious search form/path found — will still probe JSON APIs")
+        CrawlResult(true, baseUrl = effectiveBase, pages = pages)
+    }
+
+    /** Build corpus purely from browser-captured snapshots (protected sites). */
+    fun corpusFromCapture(pages: List<Triple<String, String, List<NetRecord>>>): CrawlResult {
+        if (pages.isEmpty()) return CrawlResult(false, error = "No browser-captured pages available")
+        val base = baseUrlOf(pages.first().first)
+        val snaps = pages.map { (url, html, _) ->
+            snapshot(url, html, classify(url), Jsoup.parse(html, url), viaBrowser = true)
+        }
+        return CrawlResult(true, baseUrl = base, pages = snaps)
+    }
+
+    private fun snapshot(url: String, html: String, kind: String, doc: Document, viaBrowser: Boolean = false): PageSnapshot {
+        val dom = domAnalyzer.analyze(url, html)
+        val js = try { siteAnalyzer.analyzeHtml(url, html, dom) } catch (_: Exception) { null }
+        return PageSnapshot(url, html, kind, viaBrowser, dom, js)
+    }
+
+    fun classify(url: String): String {
+        val path = try { java.net.URI(url).path ?: "" } catch (_: Exception) { url }
+        return when {
+            Regex("chapter|/chap|/ch-?\\d|глава|/read-", RegexOption.IGNORE_CASE).containsMatchIn(path) -> "chapter"
+            Regex("search|query|[?&]s=", RegexOption.IGNORE_CASE).containsMatchIn(url) -> "search"
+            Regex("/(fiction|novel|book|manga|series|story|comic|work)s?/", RegexOption.IGNORE_CASE).containsMatchIn(path) -> "book"
+            path.isEmpty() || path == "/" -> "home"
+            else -> "other"
+        }
+    }
+
+    private fun baseUrlOf(url: String): String = try {
+        val u = java.net.URI(url.trim())
+        val port = if (u.port > 0) ":${u.port}" else ""
+        "${u.scheme ?: "https"}://${u.host ?: ""}$port"
+    } catch (_: Exception) { ""
+
+    }
+
+    private fun hasChapterLinks(doc: Document): Boolean =
+        doc.select("a[href]").any { isChapterHref(it.attr("href")) }
+
+    fun isChapterHref(href: String): Boolean =
+        Regex("chapter|/ch-?\\d|/chap|глава|/read-", RegexOption.IGNORE_CASE).containsMatchIn(href)
+
+    private fun countBookishLinks(doc: Document): Int =
+        doc.select("a[href]").count { isBookHref(it.attr("href")) && it.text().length > 5 }
+
+    private fun looksLikeResults(doc: Document, query: String): Boolean =
+        doc.body().text().contains(query, ignoreCase = true)
+
+    fun isBookHref(href: String): Boolean =
+        Regex("/(novel|book|manga|series|story|comic|work|fiction)s?/", RegexOption.IGNORE_CASE).containsMatchIn(href) ||
+            Regex("/n/\\d", RegexOption.IGNORE_CASE).containsMatchIn(href)
+
+    private val utilityPath = Regex(
+        "/(notification|account|user|profile|login|register|signin|signup|auth|forum|blog|wiki|support|help|" +
+            "privacy|terms|settings|message|billing|payment|premium|donate|about|contact|career|job|api/|" +
+            "search|tag|genre|category|rank|popular|latest|home|index|read|library|author|upload)",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun findBookLinks(doc: Document, base: String): List<String> {
+        val scored = doc.select("a[href]").mapNotNull { a ->
+            val raw = a.attr("href")
+            if (raw.isBlank() || raw.startsWith("#") || raw.startsWith("mailto") || raw.startsWith("javascript")) return@mapNotNull null
+            val href = a.attr("abs:href").ifBlank { fetchResolve(base, raw) }
+            if (href.isBlank() || samePage(href, base)) return@mapNotNull null
+            if (utilityPath.containsMatchIn(href)) return@mapNotNull null
+            var score = 0
+            if (isBookHref(href)) score += 4
+            if (href.removePrefix("https://").removePrefix("http://").count { it == '/' } >= 2) score += 1
+            val text = a.text().trim()
+            if (text.length in 10..120) score += 2 else if (text.length > 120) score -= 1
+            if (a.closest(".c-tabs-item__content, .col-truyen-main, .recommendation-card, .list-truyen, .fiction-list-item") != null) score += 2
+            if (a.selectFirst("img") != null) score += 1
+            if (score < 5) return@mapNotNull null
+            href to score
+        }.sortedByDescending { it.second }
+        return scored.map { it.first }.distinct().take(6)
+    }
+
+    private fun samePage(a: String, b: String) =
+        a.substringBefore("#") == b.substringBefore("#") || a == "$b/" || b == "$a/"
+
+    private fun fetchResolve(base: String, href: String): String =
+        if (href.isBlank()) "" else fetcher.resolve(base, href)
+
+    fun firstChapterLink(doc: Document, pageUrl: String): String? {
+        val a = doc.select("a[href]").firstOrNull { isChapterHref(it.attr("href")) } ?: return null
+        val abs = a.attr("abs:href")
+        return if (abs.isNotBlank()) abs else fetchResolve(pageUrl, a.attr("href"))
+    }
+
+    /** Try the page's search form first, then common paths. Returns absolute search URL or null. */
+    fun discoverSearchUrl(homeDoc: Document, base: String, query: String): String? {
+        val q = java.net.URLEncoder.encode(query, "UTF-8")
+        for (form in homeDoc.select("form")) {
+            val action = form.attr("abs:action").ifBlank { base }
+            val textInputs = form.select("input[type=text], input:not([type]), input[type=search]")
+            val input = textInputs.firstOrNull() ?: continue
+            val name = input.attr("name")
+            if (name.isBlank()) continue
+            val method = form.attr("method").lowercase()
+            if (method == "post") continue
+            val sep = if (action.contains("?")) "&" else "?"
+            return "$action${sep}$name=$q"
+        }
+        val candidates = listOf(
+            "$base/?s=$q", "$base/search?q=$q", "$base/?searchkey=$q",
+            "$base/search/$q", "$base/tim-kiem?q=$q"
+        )
+        return candidates.firstOrNull()
+    }
+}

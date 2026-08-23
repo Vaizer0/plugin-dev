@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plugin Dev Studio</title>
+<style>
+  :root {
+    /* Material 3 dark scheme (Compose darkColorScheme defaults) */
+    --bg: #1c1b1f;            /* background/surface */
+    --surface: #1c1b1f;
+    --surface-variant: #49454f; /* surfaceVariant cards */
+    --on-surface: #e6e1e5;
+    --on-surface-var: #cac4d0;
+    --outline: #938f99;
+    --primary: #d0bcff;
+    --on-primary: #381e72;
+    --primary-container: #4a4458;
+    --on-primary-container: #eaddff;
+    --tertiary: #efb8c8;
+    --tertiary-container: #633b48;
+    --on-tertiary-container: #ffd8e4;
+    --error: #f2b8b5;
+    --error-container: #8c1d18;
+    --ok: #4caf50;
+    --warn: #ffc107;
+    --http-bg: #1a1a2e;
+    font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--on-surface); font-size: 14px; display: flex; flex-direction: column; overflow: hidden; }
+  code, .mono, pre { font-family: "JetBrains Mono", Consolas, "Courier New", monospace; }
+
+  /* ── Toolbar ── */
+  #toolbar { height: 44px; flex: none; background: var(--surface-variant); display: flex; align-items: center; padding: 0 10px; gap: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.4); z-index: 5; }
+  #toolbar .title { font-weight: 500; font-size: 14px; }
+
+  /* ── Buttons (Material outlined / filled / text) ── */
+  .btn { border-radius: 20px; padding: 5px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--outline); background: transparent; color: var(--primary); height: 30px; display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
+  .btn:hover { background: rgba(208,188,255,.08); }
+  .btn.filled { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 600; }
+  .btn.text { border: none; padding: 4px 8px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.25); border-top-color: currentColor; border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Layout ── */
+  #mainrow { flex: 1; display: flex; min-height: 0; }
+  #sidebar { width: 200px; flex: none; background: var(--surface); overflow-y: auto; padding: 8px; }
+  .nav-section-label { color: var(--on-surface-var); font-size: 11px; letter-spacing: .4px; padding: 12px 8px 4px; }
+  .nav-item { padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; margin: 1px 0; }
+  .nav-item:hover { background: rgba(230,225,229,.06); }
+  .nav-item.selected { background: var(--primary-container); color: var(--on-primary-container); font-weight: 700; }
+  .vdivider { width: 1px; background: rgba(230,225,229,.12); flex: none; }
+  #content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+
+  /* ── Status bar ── */
+  #statusbar { height: 28px; flex: none; background: var(--surface-variant); display: flex; align-items: center; padding: 0 12px; font-size: 11px; color: var(--on-surface-var); gap: 12px; }
+  #statusbar .right { margin-left: auto; white-space: nowrap; }
+
+  /* ── Common widgets ── */
+  input[type=text], select {
+    background: transparent; border: 1px solid var(--outline); color: var(--on-surface);
+    padding: 9px 12px; border-radius: 4px; outline: none; font-size: 13px; min-width: 0; width: 100%;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--primary); }
+  input::placeholder { color: var(--outline); }
+  .field { margin-bottom: 12px; position: relative; }
+  .field label { position: absolute; top: -7px; left: 10px; background: var(--bg); padding: 0 4px; font-size: 11px; color: var(--on-surface-var); }
+  .card { background: var(--surface-variant); border-radius: 4px; padding: 10px; margin: 6px 0; word-break: break-word; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--primary-container); color: var(--on-primary-container); }
+  .muted { color: var(--on-surface-var); }
+  .mono { font-family: Consolas, "Courier New", monospace; }
+  pre.out { background: var(--surface-variant); border-radius: 4px; padding: 12px; overflow: auto; max-height: 420px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  h1.big { font-size: 30px; font-weight: 400; margin: 0 0 8px; }
+  h2.sec { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+  .ok-text { color: var(--primary); } .err-text { color: var(--error); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: #3a3740; border-radius: 5px; } ::-webkit-scrollbar-track { background: transparent; }
+  details > summary { cursor: pointer; color: var(--primary); font-size: 13px; }
+  .clickable { cursor: pointer; }
+  .hoverable:hover { filter: brightness(1.15); }
+
+  /* tabs */
+  .tabrow { display: flex; border-bottom: 1px solid rgba(230,225,229,.12); background: var(--surface); flex: none; overflow-x: auto; }
+  .tab { padding: 12px 16px; cursor: pointer; color: var(--on-surface-var); font-size: 13px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  /* modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: #36343b; border-radius: 28px; padding: 24px; width: min(420px, 90vw); box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .modal h3 { margin: 0 0 12px; font-weight: 500; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+  /* plugin list */
+  .plist { width: 320px; flex: none; background: var(--surface); overflow-y: auto; border-right: 1px solid rgba(230,225,229,.12); }
+  .plist-item { padding: 12px; cursor: pointer; border-bottom: 1px solid rgba(230,225,229,.06); }
+  .plist-item.selected { background: var(--primary-container); }
+  .plist-item .nm { font-size: 15px; }
+  .plist-item .id { font-size: 12px; color: var(--on-surface-var); }
+  .plist-item .meta { display: flex; gap: 10px; font-size: 11px; margin-top: 2px; }
+
+  /* detail split */
+  .detail { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .scrollpad { padding: 16px; overflow-y: auto; flex: 1; min-height: 0; }
+  .center-note { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--on-surface); font-size: 16px; }
+
+  /* network */
+  .net-wrap { display: flex; flex: 1; min-height: 0; }
+  .net-list { width: 45%; overflow-y: auto; border-right: 1px solid rgba(230,225,229,.12); }
+  .net-detail { width: 55%; overflow-y: auto; padding: 12px; }
+  .net-entry { padding: 8px; cursor: pointer; border-bottom: 1px solid rgba(230,225,229,.06); font-size: 11px; }
+  .net-entry.selected { background: var(--primary-container); }
+  .net-line1 { display: flex; gap: 6px; font-family: Consolas, monospace; }
+  .net-url { color: var(--on-surface-var); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st-ok { color: var(--ok); } .st-warn { color: var(--warn); } .st-err { color: var(--error); }
+  table.kvtable td { padding: 2px 8px 2px 0; font-size: 11px; font-family: Consolas, monospace; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="title">Plugin Dev Studio</span>
+  <button class="btn" onclick="openFolderDialog()">Open Folder</button>
+  <span style="flex:1"></span>
+  <button class="btn text" onclick="showAbout()">About</button>
+</div>
+
+<div id="mainrow">
+  <div id="sidebar"></div>
+  <div class="vdivider"></div>
+  <div id="content"></div>
+</div>
+
+<div id="statusbar"><span id="statusMsg">Ready</span><span class="right" id="statusRight"></span></div>
+
+<div id="modalHost"></div>
+
+<script>
+/* ════════════════ helpers ════════════════ */
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = c => Math.round((c||0)*100) + '%';
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const t = await r.text();
+  try { return JSON.parse(t); } catch { throw new Error(t.slice(0,300)); }
+}
+const postJson = (path, body) => api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+function setStatus(msg) { $('#statusMsg').textContent = msg || 'Ready'; }
+function renderStatusRight() {
+  const p = S.plugins.find(x => x.id === S.selectedId);
+  $('#statusRight').textContent = `${S.plugins.length} plugins | ${p ? p.name : ''}`;
+}
+function confColor(c) { return c >= 0.7 ? 'var(--ok)' : c >= 0.5 ? 'var(--warn)' : 'var(--error)'; }
+function confClass(s) { return s === 'high' ? 'st-ok' : s === 'medium' ? 'st-warn' : 'st-err'; }
+function showError(msg) {
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" onclick="if(event.target===this)this.remove()">
+    <div class="modal"><h3>Error</h3><div>${esc(msg)}</div>
+    <div class="actions"><button class="btn text" onclick="this.closest('.modal-backdrop').remove()" style="color:var(--primary)">OK</button></div></div></div>`;
+}
+function showAbout() {
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" onclick="if(event.target===this)this.remove()">
+    <div class="modal"><h3>Plugin Dev Studio</h3>
+    <div>Version 1.0.0<br><br>Desktop GUI for testing, debugging and generating Lua plugins for Novela.<br><br>Built with Compose Desktop + Kotlin + Koin.</div>
+    <div class="actions"><button class="btn text" onclick="this.closest('.modal-backdrop').remove()" style="color:var(--primary)">OK</button></div></div></div>`;
+}
+
+/* ════════════════ state ════════════════ */
+const S = {
+  nav: 'PLUGINS',
+  pluginDir: '',
+  plugins: [],          // [{id,name,baseUrl,version,description,charset,language,isFilterable,availableFunctions,selectors}]
+  loadErrors: [],
+  selectedId: null,
+  httpLogs: [],
+  functionDefs: []
+};
+let netRefresher = null;   // active component refresh hook
+
+const NAV_SECTIONS = [
+  ['LIBRARY', ['PLUGINS']],
+  ['TOOLS',   ['QUICK_TEST', 'RUN']],
+  ['ANALYSIS',['ANALYZE', 'PATTERNS']],
+  ['NETWORK', ['NETWORK_LOGS']],
+  ['CREATE',  ['NEW_PLUGIN']]
+];
+const NAV_LABELS = { PLUGINS:'Plugins', QUICK_TEST:'Quick Test', RUN:'Run', ANALYZE:'Analyze', PATTERNS:'Patterns', NETWORK_LOGS:'Network Logs', NEW_PLUGIN:'New Plugin' };
+const DETAIL_TABS = ['Info','Quick Test','Run','Network','Analyze','Patterns'];
+
+/* ════════════════ data loading ════════════════ */
+async function loadPlugins(dirPath) {
+  try {
+    if (dirPath !== undefined) await postJson('/api/plugins/dir', {path: dirPath});
+    else await postJson('/api/plugins/reload', {});
+    const rep = await api('/api/plugins');
+    S.pluginDir = rep.sourcesDir;
+    S.plugins = rep.plugins || [];
+    S.loadErrors = rep.failed || [];
+    if (!S.plugins.find(p => p.id === S.selectedId)) S.selectedId = S.plugins[0]?.id ?? null;
+    const failInfo = S.loadErrors.length ? ` (${S.loadErrors.length} failed)` : '';
+    setStatus(`Loaded ${S.plugins.length} plugins from ${S.pluginDir}${failInfo}`);
+  } catch (e) { showError(e.message); setStatus('Error loading plugins'); }
+  renderStatusRight();
+}
+
+async function pollLogs() {
+  try { S.httpLogs = await api('/api/network/logs'); if (netRefresher) netRefresher(); } catch {}
+}
+
+/* browser-sent analysis (bookmarklet) */
+let lastSentKey = null, pendingReceived = null;
+async function pollLastSent() {
+  try {
+    const r = await api('/api/analyze/last');
+    if (!r || r.none || !r.url) return;
+    const key = r.url + '|' + r.durationMs;
+    if (key === lastSentKey) return;
+    lastSentKey = key; pendingReceived = r;
+    showReceiveBanner(r);
+  } catch {}
+}
+function showReceiveBanner(r) {
+  const host = $('#anOut'); if (!host) return;
+  let b = $('#recvBanner');
+  if (!b) { b = document.createElement('div'); b.id = 'recvBanner'; host.prepend(b); }
+  b.className = 'card';
+  b.style.cssText = 'background:#1e3a2f;border-left:3px solid var(--ok)';
+  b.innerHTML = `<b style="color:var(--ok)">✓ Page received from your browser: ${esc(r.url)}</b><br>
+    <button class="btn filled" style="margin-top:6px" onclick="viewReceived()">View analysis</button>`;
+}
+function viewReceived() { if (pendingReceived) renderAnalysis(pendingReceived); }
+setInterval(pollLastSent, 2000);
+
+/* ════════════════ navigation ════════════════ */
+function renderSidebar() {
+  $('#sidebar').innerHTML = '<div style="padding:4px 8px 8px;font-weight:600;font-size:14px">Navigation</div>' +
+    NAV_SECTIONS.map(([sec, items]) =>
+      `<div class="nav-section-label">${sec.charAt(0)}${sec.slice(1).toLowerCase()}</div>` +
+      items.map(i => `<div class="nav-item ${S.nav===i?'selected':''}" onclick="navTo('${i}')">${NAV_LABELS[i]}</div>`).join('')
+    ).join('');
+}
+function navTo(item) { S.nav = item; renderSidebar(); mountContent(); }
+function selectedPlugin() { return S.plugins.find(p => p.id === S.selectedId) || null; }
+
+function mountContent() {
+  if (netRefresher) netRefresher = null;
+  const c = $('#content');
+  c.innerHTML = '';
+  if (S.nav === 'NEW_PLUGIN') return mountNewPlugin(c);
+  if (S.nav === 'NETWORK_LOGS') return mountNetworkPage(c);
+  // remaining pages need a selected plugin
+  const p = selectedPlugin();
+  if (!p) { c.innerHTML = '<div class="center-note">Select a plugin first</div>'; return; }
+  switch (S.nav) {
+    case 'QUICK_TEST': c.innerHTML = '<div class="detail"><div class="scrollpad" id="viewHost"></div></div>'; mountPipeline($('#viewHost'), p); break;
+    case 'RUN':        c.innerHTML = '<div class="detail"><div class="scrollpad" id="viewHost"></div></div>'; mountRun($('#viewHost'), p); break;
+    case 'ANALYZE':    c.innerHTML = '<div class="detail"><div class="scrollpad" id="viewHost"></div></div>'; mountAnalyze($('#viewHost'), p); break;
+    case 'PATTERNS':   c.innerHTML = '<div class="detail"><div class="scrollpad" id="viewHost"></div></div>'; mountPatterns($('#viewHost'), p); break;
+    case 'PLUGINS':
+    default:
+      if (S.plugins.length === 0 && !S.loadErrors.length) {
+        c.innerHTML = `<div class="center-note"><div style="text-align:center">
+          <h1 class="big">Plugin Dev Studio</h1>
+          <div class="muted" style="font-size:15px">No plugins loaded</div>
+          <div class="muted" style="font-size:12px;margin:8px 0 24px">Default path: ${esc(S.pluginDir)}</div>
+          <button class="btn filled" onclick="openFolderDialog()">Open Plugins Folder</button></div></div>`;
+      } else {
+        c.innerHTML = `
+          <div class="plist" id="plistHost"></div>
+          <div class="vdivider"></div>
+          <div class="detail" id="detailHost"></div>`;
+        renderPluginList(); mountDetail();
+      }
+  }
+}
+
+/* ════════════════ folder dialog ════════════════ */
+function openFolderDialog() {
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" onclick="if(event.target===this)this.close()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Select plugins folder</h3>
+      <input type="text" id="folderPathInput" value="${esc(S.pluginDir || '')}" placeholder="/path/to/lua/sources">
+      <div class="muted" style="font-size:11px;margin-top:6px">Folder should contain .lua source files (optionally index.yaml).</div>
+      <div class="actions">
+        <button class="btn text" onclick="this.closest('.modal-backdrop').remove()" style="color:var(--primary)">Cancel</button>
+        <button class="btn text" onclick="confirmFolder()" style="color:var(--primary)">Open</button>
+      </div>
+    </div></div>`;
+}
+async function confirmFolder() {
+  const path = $('#folderPathInput').value.trim();
+  if (!path) return;
+  document.querySelectorAll('.modal-backdrop').forEach(m => m.remove());
+  await loadPlugins(path);
+  mountContent();
+}
+
+/* ════════════════ Plugins page ════════════════ */
+let errorsExpanded = false;
+let detailTab = 'Info';
+function renderPluginList() {
+  const host = $('#plistHost'); if (!host) return;
+  let html = `<div style="padding:16px;font-size:17px;font-weight:600">Plugins (${S.plugins.length})</div>`;
+  if (S.loadErrors.length) {
+    html += `<div class="clickable card" style="margin:2px 12px;background:var(--error-container)" onclick="errorsExpanded=!errorsExpanded;renderPluginList()">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="color:#f9dedc;font-size:12px">${S.loadErrors.length} failed to load</span><span>${errorsExpanded?'▲':'▼'}</span></div></div>`;
+    if (errorsExpanded) html += S.loadErrors.map(e => `<div class="card" style="margin:2px 12px">
+      <div style="font-size:11px;color:var(--error)">${esc(e.file)}</div>
+      <div style="font-size:12px;color:var(--on-surface-var)">${esc(e.message)}</div></div>`).join('');
+    html += '<div style="border-top:1px solid rgba(230,225,229,.12);margin:6px 0"></div>';
+  }
+  html += S.plugins.map(p => `<div class="plist-item hoverable ${p.id===S.selectedId?'selected':''}" onclick="selectPlugin('${esc(p.id)}')">
+    <div class="nm">${esc(p.name)}</div>
+    <div class="id">${esc(p.id)}</div>
+    <div class="meta"><span>${esc((p.language||'??').toUpperCase())}</span><span>v${esc(p.version)}</span></div>
+  </div>`).join('');
+  host.innerHTML = html;
+}
+function selectPlugin(id) { S.selectedId = id; renderPluginList(); renderStatusRight(); mountDetail(); }
+
+function mountDetail() {
+  const host = $('#detailHost'); if (!host) return;
+  const p = selectedPlugin();
+  if (!p) { host.innerHTML = '<div class="center-note">Select a plugin from the list</div>'; return; }
+  host.innerHTML = `<div class="tabrow">${DETAIL_TABS.map(t =>
+      `<div class="tab ${t===detailTab?'active':''}" onclick="detailTab='${t.replace(/'/g,"\\'")}';mountDetail()">${t}</div>`).join('')}</div>
+    <div class="scrollpad" id="tabBody" style="${detailTab==='Quick Test'||detailTab==='Run'||detailTab==='Network'?'padding:8px':''}"></div>`;
+  const body = $('#tabBody');
+  switch (detailTab) {
+    case 'Info': mountInfo(body, p); break;
+    case 'Quick Test': mountPipeline(body, p); break;
+    case 'Run': mountRun(body, p); break;
+    case 'Network': mountNetworkPanel(body); break;
+    case 'Analyze': mountAnalyze(body, p); break;
+    case 'Patterns': mountPatterns(body, p); break;
+  }
+}
+
+/* ── Info tab ── */
+function mountInfo(host, p) {
+  const fns = ['getCatalogList','getCatalogSearch','getBookTitle','getBookCoverImageUrl','getBookDescription','getBookGenres','getChapterList','getChapterText','parsePage'];
+  host.innerHTML = `
+    <h1 class="big">${esc(p.name)}</h1>
+    <div>ID: ${esc(p.id)}</div>
+    <div>Base URL: ${esc(p.baseUrl)}</div>
+    <div>Language: ${esc(p.language || '')}</div>
+    <div>Version: ${esc(p.version)}</div>
+    ${p.description ? `<div style="margin-top:8px">Description: ${esc(p.description)}</div>` : ''}
+    <h2 class="sec">Functions:</h2>
+    ${fns.map(f => `<div class="${p.availableFunctions.includes(f)?'ok-text':'err-text'}" style="padding:1px 0">${p.availableFunctions.includes(f)?'✓':'✗'} ${f}</div>`).join('')}`;
+}
+
+/* ── Run tab ── */
+function mountRun(host, p) {
+  const defsByName = Object.fromEntries(S.functionDefs.map(d => [d.name, d]));
+  const funcs = p.availableFunctions.filter(n => defsByName[n]).map(n => defsByName[n]);
+  host.innerHTML = `
+    <h2 class="sec" style="margin-top:0">Run Function</h2>
+    <div class="field"><label>Function</label>
+      <select id="runFnSel" onchange="runFnChanged()">
+        ${funcs.map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('')}
+      </select></div>
+    <div id="runParams"></div>
+    <button class="btn filled" id="runBtn" onclick="runFunction()" style="width:100%">Run</button>
+    <div id="runResultWrap" style="margin-top:16px"></div>`;
+  window.__runFuncs = funcs;
+  runFnChanged();
+}
+function runFnChanged() {
+  const fn = window.__runFuncs.find(f => f.name === $('#runFnSel').value);
+  const p = selectedPlugin();
+  let html = '';
+  if (fn) {
+    html += `<div class="muted" style="margin:4px 0 8px">${esc(fn.name)} : ${esc(fn.returnType)}</div>`;
+    const sels = (p.selectors || {})[fn.name];
+    if (sels && sels.length) html += `<div class="mono ok-text" style="font-size:11px;margin-bottom:6px">Selector: ${esc(sels.join(', '))}</div>`;
+    html += (fn.params||[]).map(pr => `<div class="field"><label>${esc(pr.name)}</label>
+      <input type="text" id="arg_${esc(pr.name)}" placeholder="${esc(pr.hint||'')}" value="${pr.defaultValue!=null?esc(pr.defaultValue):''}"></div>`).join('');
+  }
+  $('#runParams').innerHTML = html;
+  $('#runResultWrap').innerHTML = '';
+}
+async function runFunction() {
+  const p = selectedPlugin(); if (!p) return;
+  const fnName = $('#runFnSel').value;
+  const btn = $('#runBtn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  const args = {};
+  window.__runFuncs.find(f => f.name === fnName).params.forEach(pr => {
+    args[pr.name] = document.getElementById('arg_' + pr.name)?.value ?? '';
+  });
+  try {
+    const res = await postJson('/api/run', {pluginId: p.id, function: fnName, args});
+    $('#runResultWrap').innerHTML = `<div style="font-weight:600;font-size:13px;margin-bottom:4px">Result (${res.durationMs}ms):</div>
+      <pre class="out" style="max-height:400px">${esc(res.success ? (res.data ?? 'null') : ('Error: ' + res.error))}</pre>`;
+  } catch (e) { showError(e.message); }
+  btn.disabled = false; btn.textContent = 'Run';
+}
+
+/* ── Network panel (shared) ── */
+let netSelectedIdx = null, showFullNetBody = false;
+function netEntryHtml(e, i, selected) {
+  const stCls = e.statusCode >= 200 && e.statusCode <= 299 ? 'st-ok' : e.statusCode >= 300 && e.statusCode <= 399 ? 'st-warn' : 'st-err';
+  return `<div class="net-entry ${selected?'selected':''}" onclick="netSelect(${i})">
+    <div class="net-line1">
+      <span class="${e.success?'st-ok':'st-err'}">${e.success?'✓':'✗'}</span>
+      <span style="width:34px;font-weight:700">${esc(e.method)}</span>
+      <span class="${stCls}" style="width:44px">[${esc(e.statusCode)}]</span>
+      <span style="width:44px">${esc(e.durationMs)}ms</span>
+      <span class="muted" style="width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((e.contentType||'').slice(0,25))}</span>
+    </div>
+    <div class="net-url">${esc(e.url)}</div>
+    <div class="muted">${esc((e.responseBody||'').length)}b</div>
+  </div>`;
+}
+function mountNetworkPanel(host) {
+  host.style.padding = '8px';
+  host.innerHTML = `<div class="net-wrap">
+    <div class="net-list">
+      <div style="display:flex;align-items:center;padding:6px 8px;background:var(--surface-variant);position:sticky;top:0;z-index:1">
+        <span style="flex:1;font-weight:600;font-size:13px">HTTP Requests (<span id="netCount">0</span>)</span>
+        <button class="btn text" onclick="clearNetwork()" style="color:var(--primary);font-size:11px">Clear</button>
+      </div>
+      <div id="netListBody"></div>
+    </div>
+    <div class="net-detail" id="netDetail"><span class="muted">Select a request to inspect</span></div>
+  </div>`;
+  netRefresher = () => renderNetList();
+  renderNetList();
+}
+function renderNetList() {
+  const body = $('#netListBody'); if (!body) return;
+  $('#netCount').textContent = S.httpLogs.length;
+  body.innerHTML = S.httpLogs.map((e, i) => netEntryHtml(e, i, i === netSelectedIdx)).join('') ||
+    '<div class="muted" style="padding:12px">No requests yet</div>';
+  if (netSelectedIdx != null && netSelectedIdx < S.httpLogs.length) renderNetDetail(); 
+}
+function netSelect(i) { netSelectedIdx = i; renderNetList(); }
+function renderNetDetail() {
+  const host = $('#netDetail'); if (!host || netSelectedIdx == null) return;
+  const e = S.httpLogs[netSelectedIdx]; if (!e) return;
+  const hdrRows = h => Object.entries(h || {}).map(([k, v]) => `<tr><td style="color:var(--primary)">${esc(k)}:</td><td>${esc(v)}</td></tr>`).join('');
+  const bodyLen = (e.responseBody || '').length;
+  const full = showFullNetBody || bodyLen <= 5000;
+  host.innerHTML = `
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Request</div>
+    <div class="mono" style="font-size:12px">${esc(e.method)} ${esc(e.url)}</div>
+    ${Object.keys(e.requestHeaders||{}).length ? `<div class="muted" style="font-size:11px;margin-top:4px">Headers:</div><table class="kvtable">${hdrRows(e.requestHeaders)}</table>` : ''}
+    <div style="font-weight:700;font-size:13px;margin:14px 0 4px">Response</div>
+    <div class="mono" style="font-size:12px">Status: ${esc(e.statusCode)}  ${esc(e.durationMs)}ms  ${bodyLen}b  Type: ${esc(e.contentType)}</div>
+    ${Object.keys(e.responseHeaders||{}).length ? `<div class="muted" style="font-size:11px;margin-top:4px">Headers:</div><table class="kvtable">${hdrRows(e.responseHeaders)}</table>` : ''}
+    <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+      <span class="muted" style="font-size:11px">Body:</span>
+      <button class="btn text" style="font-size:11px;color:var(--primary)" onclick="showFullNetBody=!showFullNetBody;renderNetDetail()">
+        ${full ? 'Collapse' : `Show All ${bodyLen}b`}</button></div>
+    <pre class="out" style="margin-top:4px;background:transparent">${
+      bodyLen ? esc(full ? e.responseBody : e.responseBody.slice(0, 5000)) +
+        (full ? '' : `\n... (${bodyLen - 5000} more bytes. Click 'Show All')`) : '(empty)'
+    }</pre>`;
+}
+async function clearNetwork() { await postJson('/api/network/clear', {}); netSelectedIdx = null; showFullNetBody = false; }
+function mountNetworkPage(c) { c.innerHTML = '<div class="detail"><div class="scrollpad" id="viewHost"></div></div>'; mountNetworkPanel($('#viewHost')); }
+
+/* ── Quick Test / Pipeline ── */
+function pipeState(p) {
+  if (!window.__pipe || window.__pipe.pid !== p.id) window.__pipe = {
+    pid: p.id, view: 'CATALOG', bookUrl: '', bookName: '', chUrl: '', chTitle: '', prevView: null,
+    showHttp: false, mode: p.availableFunctions.includes('getCatalogList') ? 'catalog'
+      : p.availableFunctions.includes('getCatalogSearch') ? 'search'
+      : p.isFilterable ? 'filtered' : 'catalog',
+    query: '', books: null, loading: false, log: [],
+    filters: null, filterValues: {},
+    bTitle: null, bCover: null, bDesc: null, bGenres: null, bChapters: null, bLog: [], bLoading: false,
+    chText: null, chLog: [], chLoading: false
+  };
+  return window.__pipe;
+}
+function mountPipeline(host, p) {
+  host.style.padding = '8px';
+  const st = pipeState(p);
+  const modes = [];
+  if (p.availableFunctions.includes('getCatalogList')) modes.push(['catalog', 'Catalog']);
+  if (p.availableFunctions.includes('getCatalogSearch')) modes.push(['search', 'Search']);
+  if (p.isFilterable) modes.push(['filtered', 'Filtered']);
+  if (!modes.find(m => m[0] === st.mode)) st.mode = modes[0]?.[0] || 'catalog';
+
+  host.innerHTML = `
+    <div class="card" style="display:flex;align-items:center;gap:6px;padding:4px 8px;margin:0 0 4px">
+      <span style="color:var(--primary);font-size:12px">Pipeline</span>
+      ${st.view!=='CATALOG' ? `<span>›</span><span class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;max-width:200px">${esc(st.bookName.slice(0,50))}</span>` : ''}
+      ${st.view==='CHAPTER' ? `<span>›</span><span class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;max-width:160px">${esc(st.chTitle.slice(0,40))}</span>` : ''}
+      ${st.view!=='CATALOG' ? `<button class="btn text" onclick="pipeBack()" style="font-size:12px;color:var(--primary)">← Back</button>` : ''}
+      <span style="flex:1"></span>
+      <button class="btn text" onclick="togglePipeHttp()" style="font-size:11px;color:var(--primary)">${st.showHttp?`Hide HTTP`:`HTTP (${S.httpLogs.length})`}</button>
+    </div>
+    <div id="pipeHttpPanel"></div>
+    <div id="pipeBody"></div>`;
+  window.__pipeModes = modes;
+  renderPipeHttp();
+  renderPipeBody(modes);
+}
+function togglePipeHttp() { const st = pipeState(selectedPlugin()); st.showHttp = !st.showHttp; remountCurrentTabIf('Quick Test'); }
+function pipeBack() {
+  const st = pipeState(selectedPlugin());
+  if (st.prevView) { st.view = st.prevView; st.prevView = null; }
+  remountCurrentTabIf('Quick Test');
+}
+function remountCurrentTabIf(tab) { if ((S.nav==='PLUGINS' && detailTab===tab) || S.nav==='QUICK_TEST') mountContent(); }
+
+function renderPipeHttp() {
+  const st = pipeState(selectedPlugin()); const host = $('#pipeHttpPanel'); if (!host) return;
+  host.innerHTML = st.showHttp ? `<div style="background:var(--http-bg);border-radius:4px;height:200px;overflow-y:auto;padding:4px;margin-bottom:4px">
+    ${S.httpLogs.slice(0,100).map(e => `<div style="margin-bottom:2px">
+      <div class="mono ${e.success?'st-ok':'st-err'}" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+        ${esc(e.method)} ${esc(e.url)} [${esc(e.statusCode)}] ${esc(e.durationMs)}ms body=${(e.responseBody||'').length}b ct=${esc((e.contentType||'').slice(0,30))}</div>
+      ${(e.responseBody||'') ? `<div class="mono" style="font-size:11px;color:#888888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">  body: ${esc(e.responseBody.slice(0,500).replace(/\n/g,'\\n'))}</div>` : ''}
+    </div>`).join('') || '<span class="muted" style="font-size:11px">no requests yet</span>'}
+  </div>` : '';
+}
+
+function renderPipeBody(modes) {
+  const p = selectedPlugin(); const st = pipeState(p); const host = $('#pipeBody'); if (!host) return;
+  if (st.view === 'CATALOG') {
+    host.innerHTML = `
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        ${modes.map(([k, lbl]) => `<button class="btn" style="${st.mode===k?'background:var(--secondary,#4a4458);':''}"
+          onclick="pipeSetMode('${k}')">${lbl}</button>`).join('')}
+        ${st.mode==='search' ? `<input type="text" id="pipeQuery" placeholder="query" style="flex:1;min-width:120px" value="${esc(st.query)}"
+          oninput="window.__pipe.query=this.value">` : ''}
+        <button class="btn filled" id="pipeLoadBtn" onclick="pipeLoad()">Load</button>
+      </div>
+      <div id="pipeFilters"></div>
+      <div id="pipeResults"></div>`;
+    renderPipeFilters();
+    renderPipeResults();
+  } else if (st.view === 'BOOK') {
+    host.innerHTML = st.bLoading ? `<div style="display:flex;justify-content:center;padding:60px"><span class="spinner" style="width:26px;height:26px;border-color:var(--primary);border-top-color:transparent"></span></div>`
+      : `<div id="bookView"></div>`;
+    if (!st.bLoading) renderBookView();
+  } else if (st.view === 'CHAPTER') {
+    host.innerHTML = st.chLoading ? `<div style="display:flex;justify-content:center;padding:60px"><span class="spinner" style="width:26px;height:26px;border-color:var(--primary);border-top-color:transparent"></span></div>`
+      : `<div id="chapterView"></div>`;
+    if (!st.chLoading) renderChapterView();
+  }
+}
+function pipeSetMode(mode) {
+  const st = pipeState(selectedPlugin()); st.mode = mode;
+  if (mode === 'filtered' && st.filters === null && selectedPlugin().isFilterable) {
+    api(`/api/pipeline/filters?pluginId=${encodeURIComponent(st.pid)}`).then(res => {
+      if (res.ok) {
+        st.filters = res.filters || [];
+        st.filterValues = Object.fromEntries(st.filters.map(f => [f.key, f.defaultValue != null ? [f.defaultValue] : []]));
+        renderPipeFilters();
+      }
+    }).catch(() => {});
+  }
+  renderPipeBody(window.__pipeModes || []);
+}
+function selLine(name) {
+  const p = selectedPlugin(); const sels = (p.selectors || {})[name];
+  return sels && sels.length ? `<div class="mono ok-text" style="font-size:11px"> ↳ ${esc(JSON.stringify(sels))}</div>` : '';
+}
+async function pipeLoad() {
+  const st = pipeState(selectedPlugin());
+  st.loading = true; st.books = null; st.log = [];
+  const btn = $('#pipeLoadBtn'); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  const res = await postJson('/api/pipeline/catalog', {pluginId: st.pid, mode: st.mode, query: st.query, filters: st.filterValues}).catch(e => ({ok:false, log:[{ok:false,message:'✗ '+e.message}]}));
+  st.loading = false;
+  st.log = (res.log||[]).map(l => l.message);
+  st.books = res.books || [];
+  remountCurrentTabIf('Quick Test');
+}
+function renderPipeFilters() {
+  const st = pipeState(selectedPlugin()); const host = $('#pipeFilters'); if (!host) return;
+  if (st.mode !== 'filtered' || !st.filters) { host.innerHTML = ''; return; }
+  host.innerHTML = `<div class="card" style="margin:4px 0"><div style="font-weight:600;font-size:12px;margin-bottom:6px">Filters:</div>
+    ${st.filters.map((f, fi) => {
+      const cur = (st.filterValues[f.key]||[])[0] ?? f.defaultValue ?? '';
+      const disp = (f.options.find(o => o.value === cur) || {}).label || cur;
+      return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+        <span class="muted" style="width:110px;font-size:12px">${esc(f.label)}:</span>
+        <select style="height:32px;width:auto;min-width:140px" onchange="setFilter('${esc(f.key)}', this.value)">
+          ${f.options.map(o => `<option value="${esc(o.value)}" ${o.value===cur?'selected':''}>${esc(o.label)}</option>`).join('')}
+        </select></div>`;
+    }).join('')}</div>`;
+}
+function setFilter(key, val) { const st = pipeState(selectedPlugin()); st.filterValues[key] = [val]; renderPipeFilters(); }
+function renderPipeResults() {
+  const st = pipeState(selectedPlugin()); const host = $('#pipeResults'); if (!host) return;
+  if (st.books === null && !st.loading) { host.innerHTML = '<div class="center-note" style="padding:40px;color:var(--on-surface-var);font-size:13px">Click Load to fetch catalog</div>'; return; }
+  const funcKey = st.mode==='catalog' ? 'getCatalogList' : st.mode==='search' ? 'getCatalogSearch' : 'getCatalogFiltered';
+  host.innerHTML = `
+    ${st.log.map(l => `<div class="mono ${l.startsWith('✓')?'ok-text':'err-text'}" style="font-size:12px">${esc(l)}</div>`).join('')}
+    ${selLine(funcKey)}
+    ${st.books !== null ? `<div style="font-weight:600;font-size:13px;margin:8px 0 4px">Results (${st.books.length}):</div>
+      ${st.books.map((b, i) => `<div class="card hoverable clickable" style="margin:4px 0" onclick="openBook(${i})">
+        <div style="display:flex;gap:8px"><span class="muted" style="font-size:11px;width:24px;flex:none">${b.idx+1}.</span>
+        <div style="min-width:0">
+          <div style="font-weight:500;${b.title?'':'color:var(--error)'}">${b.title?esc(b.title):'(empty title)'}</div>
+          <div class="net-url muted" style="font-size:11px">${esc(b.url)}</div>
+          <div class="mono ${b.coverImageUrl?'ok-text':'err-text'}" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${b.coverImageUrl?'Cover: '+esc(b.coverImageUrl):'Cover: MISSING'}</div>
+        </div></div></div>`).join('')}` : ''}`;
+}
+function openBook(idx) {
+  const st = pipeState(selectedPlugin());
+  const b = st.books[idx]; if (!b) return;
+  st.bookUrl = b.url; st.bookName = b.title;
+  st.bTitle=null; st.bCover=null; st.bDesc=null; st.bGenres=null; st.bChapters=null; st.bLog=[];
+  st.prevView = 'CATALOG'; st.view = 'BOOK'; st.bLoading = true;
+  remountCurrentTabIf('Quick Test');
+  postJson('/api/pipeline/book', {pluginId: st.pid, bookUrl: b.url}).then(res => {
+    st.bLoading = false;
+    st.bLog = (res.log||[]).map(l => l.message);
+    st.bTitle = res.title; st.bCover = res.cover; st.bDesc = res.description;
+    st.bGenres = res.genres || []; st.bChapters = res.chapters || [];
+    remountCurrentTabIf('Quick Test');
+  }).catch(e => { st.bLoading = false; st.bLog = ['✗ ' + e.message]; remountCurrentTabIf('Quick Test'); });
+}
+function renderBookView() {
+  const st = pipeState(selectedPlugin()); const host = $('#bookView'); if (!host) return;
+  host.innerHTML = `
+    <div style="font-size:24px;font-weight:500">${st.bTitle?esc(st.bTitle):'<span class="muted">(no title)</span>'}</div>
+    <div class="muted" style="font-size:11px">${esc(st.bookUrl)}</div>
+    ${st.bLog.map(l => `<div class="mono ${l.startsWith('✓')?'ok-text':'err-text'}" style="font-size:11px">${esc(l)}</div>`).join('')}
+    <div style="border-top:1px solid rgba(230,225,229,.12);margin:6px 0"></div>
+    ${st.bCover ? `<div style="font-size:11px;font-weight:600;margin-top:6px">Cover URL:</div>
+      <div class="mono" style="font-size:12px;word-break:break-all">${esc(st.bCover)}</div>${selLine('getBookCoverImageUrl')}` : ''}
+    ${st.bDesc ? `<div style="font-size:11px;font-weight:600;margin-top:6px">Description (${st.bDesc.length} chars):</div>
+      <div style="font-size:13px">${esc(st.bDesc.slice(0,500))}</div>${selLine('getBookDescription')}
+      ${st.bDesc.length>500?'<div class="muted" style="font-size:11px">... (truncated)</div>':''}` : ''}
+    ${st.bGenres?.length ? `<div style="font-size:11px;font-weight:600;margin-top:6px">Genres:</div>
+      <div style="font-size:13px">${esc(st.bGenres.join(', '))}</div>${selLine('getBookGenres')}` : ''}
+    <div style="font-weight:600;font-size:13px;margin:10px 0 4px">Chapters (${st.bChapters?.length || 0}):</div>
+    ${( (selectedPlugin().selectors||{})['getChapterList'] || (selectedPlugin().selectors||{})['parsePage'] ) ?
+      `<div class="mono ok-text" style="font-size:11px"> ↳ ${esc(JSON.stringify((selectedPlugin().selectors||{})['getChapterList']||(selectedPlugin().selectors||{})['parsePage']))}</div>` : ''}
+    ${(st.bChapters||[]).map((ch, i) => `<div class="card hoverable clickable" style="margin:3px 0;display:flex;gap:8px;align-items:center"
+        onclick="openChapter(${i})">
+        <span class="muted" style="font-size:11px;width:28px;flex:none">${i+1}.</span>
+        <div style="min-width:0"><div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ch.title)}</div>
+        <div class="net-url muted" style="font-size:11px">${esc(ch.url)}</div></div></div>`).join('')}`;
+}
+function openChapter(idx) {
+  const st = pipeState(selectedPlugin());
+  const ch = st.bChapters[idx]; if (!ch) return;
+  st.chUrl = ch.url; st.chTitle = ch.title; st.chText = null; st.chLoading = true; st.prevView = 'BOOK'; st.view = 'CHAPTER';
+  remountCurrentTabIf('Quick Test');
+  postJson('/api/pipeline/chapter', {pluginId: st.pid, url: ch.url}).then(res => {
+    st.chLoading = false; st.chLog = (res.log||[]).map(l => l.message); st.chText = res.text;
+    remountCurrentTabIf('Quick Test');
+  }).catch(e => { st.chLoading = false; st.chLog = ['✗ ' + e.message]; remountCurrentTabIf('Quick Test'); });
+}
+function renderChapterView() {
+  const st = pipeState(selectedPlugin()); const host = $('#chapterView'); if (!host) return;
+  host.innerHTML = `
+    <div style="font-weight:600;font-size:14px">${esc(st.chTitle)}</div>
+    <div class="muted" style="font-size:11px">${esc(st.chUrl)}</div>
+    ${st.chLog.map(l => `<div class="mono ${l.startsWith('✓')?'ok-text':'err-text'}" style="font-size:11px">${esc(l)}</div>`).join('')}
+    ${selLine('getChapterText')}
+    <div style="border-top:1px solid rgba(230,225,229,.12);margin:6px 0"></div>
+    ${st.chText != null ? `<pre class="out" style="max-height:calc(100vh - 320px)">${esc(st.chText)}</pre>` : ''}`;
+}
+
+/* ── Analyze tab ── */
+const PURPOSE_LABELS = [
+  ['catalog_container','Catalog container'], ['book_title','Book title'], ['book_cover','Book cover'],
+  ['book_description','Book description'], ['chapter_list','Chapter list'], ['chapter_content','Chapter content'], ['pagination','Pagination']
+];
+function mountAnalyze(host, p) {
+  host.innerHTML = `
+    <h2 class="sec" style="margin-top:0">Site Analyzer</h2>
+    <div class="field" style="max-width:640px"><label>URL</label><input type="text" id="anUrl" placeholder="https://example.com" value="${esc(p.baseUrl || '')}"></div>
+    <button class="btn filled" id="anBtn" onclick="doAnalyze()">Analyze</button>
+    <div id="anError" class="err-text" style="margin-top:8px;white-space:pre-wrap"></div>
+    <div id="anOut"></div>
+    <details style="margin-top:18px">
+      <summary>Cloudflare-protected site? Analyze from your own browser →</summary>
+      <div class="card" style="margin-top:8px">
+        <b style="font-size:13px">Option A — Bookmarklet (recommended)</b>
+        <ol style="font-size:12px;color:var(--on-surface-var);margin:6px 0;padding-left:20px">
+          <li>Bookmark this page, then edit the bookmark and paste the code below as its URL (name it e.g. <i>"Analyze in Studio"</i>).</li>
+          <li>Open the protected site in your browser (pass the Cloudflare check).</li>
+          <li>Tap the bookmark — the live page is sent to the Studio and analyzed here.</li>
+        </ol>
+        <button class="btn" onclick="copyBookmarklet()">Copy bookmarklet code</button>
+        <span id="bmCopied" class="ok-text" style="font-size:11px;margin-left:8px"></span>
+        <pre class="out" style="max-height:110px;margin-top:8px" id="bmCode"></pre>
+        <b style="font-size:13px;display:block;margin-top:10px">Option B — Paste page source</b>
+        <div class="muted" style="font-size:11px;margin:4px 0">On a desktop browser: open the site, right-click → View Page Source → select all → copy, then paste here.</div>
+        <textarea id="anPaste" placeholder="&lt;!DOCTYPE html&gt; …" style="width:100%;min-height:90px;background:transparent;border:1px solid var(--outline);color:var(--on-surface);border-radius:4px;padding:8px;font-family:Consolas,monospace;font-size:11px"></textarea>
+        <button class="btn filled" style="margin-top:6px" onclick="analyzePasted()">Analyze pasted HTML</button>
+      </div>
+    </details>`;
+  $('#bmCode').textContent = BOOKMARKLET;
+}
+const BOOKMARKLET = "javascript:(function(){var s='<!DOCTYPE html>'+document.documentElement.outerHTML;" +
+  "fetch('http://localhost:8080/api/analyze/html',{method:'POST',headers:{'Content-Type':'application/json'}," +
+  "body:JSON.stringify({url:location.href,html:s})}).then(function(r){return r.json()})" +
+  ".then(function(j){j.success?alert('Sent! Open http://localhost:8080 to view the analysis.'):" +
+  "alert('Studio error: '+(j.error||'?'))}).catch(function(e){alert('Cannot reach studio at localhost:8080 — '+e)})})();";
+function copyBookmarklet() {
+  const ta = document.createElement('textarea');
+  ta.value = BOOKMARKLET; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); $('#bmCopied').textContent = 'copied ✓'; setTimeout(() => { const el = $('#bmCopied'); if (el) el.textContent=''; }, 2000); } catch {}
+  ta.remove();
+}
+async function doAnalyze() {
+  const btn = $('#anBtn'); const url = $('#anUrl').value.trim();
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  $('#anError').textContent = ''; $('#anOut').innerHTML = '';
+  try {
+    const r = await postJson('/api/analyze', {url});
+    if (!r.success) {
+      $('#anError').textContent = 'Error: ' + (r.error || 'failed');
+      if ((r.error||'').match(/bot protection|Cloudflare|blocked/i)) {
+        $('#anError').innerHTML += '<br><span class="muted" style="font-size:12px">Tip: expand “Cloudflare-protected site?” below to analyze it via your own browser.</span>';
+      }
+      return;
+    }
+    renderAnalysis(r);
+  } catch (e) { $('#anError').textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Analyze'; }
+}
+async function analyzePasted() {
+  const html = $('#anPaste').value.trim();
+  if (!html) return;
+  const url = $('#anUrl').value.trim() || 'https://pasted-source';
+  const btn = event.target;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Analyzing…';
+  $('#anError').textContent = ''; $('#anOut').innerHTML = '';
+  try {
+    const r = await postJson('/api/analyze/html', {url, html});
+    r.success ? renderAnalysis(r) : ($('#anError').textContent = 'Error: ' + (r.error || 'failed'));
+  } catch (e) { $('#anError').textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Analyze pasted HTML'; }
+}
+function renderAnalysis(r) {
+  let banner = '';
+  if (r.viaArchive) {
+    banner = `<div class="card" style="background:#5c4a1e;border-left:3px solid var(--warn);margin-bottom:10px">
+      <b style="color:var(--warn)">⚠ Fetched from Wayback Machine</b>
+      <div class="muted" style="font-size:11px;margin-top:4px">The live site blocks bots (Cloudflare challenge), so a saved snapshot was analyzed instead.
+      Structure may differ slightly from the live page.${r.archiveUrl ? ' Snapshot: <a href="'+esc(r.archiveUrl)+'" target="_blank" style="color:var(--primary)">'+esc(r.archiveUrl)+'</a>' : ''}</div></div>`;
+  }
+  $('#anOut').innerHTML = banner + analyzeHtml(r);
+  window.scrollTo(0, 0);
+}
+function analyzeHtml(r) {
+  const d = r.dom || {}, js = r.js || {}, sum = js.summary || {}, cms = d.cms;
+  let out = `<h2 class="sec">Summary</h2>
+    <div>JS: ${sum.totalJsFiles||0} · Findings: ${sum.totalFindings||0} · Endpoints: ${sum.totalEndpoints||0} · Selectors: ${sum.totalCssSelectors||0}</div>
+    ${(sum.warningMessages||[]).map(w => `<div class="err-text" style="font-size:12px">${esc(w)}</div>`).join('')}`;
+
+  if (d.cms) {
+    const cms2 = cms;
+    out += `<h2 class="sec">DOM Analysis</h2>
+      <div class="card" style="background:var(--primary-container)">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <b style="font-size:15px">CMS: ${esc(cms2.name)}</b>
+          ${cms2.clusterId ? `<span class="pill" style="background:var(--tertiary-container);color:var(--on-tertiary-container)">${esc(cms2.clusterId)}</span>` : ''}
+        </div>
+        ${cms2.themeVariant ? `<div style="font-size:12px;margin-top:2px">Theme: ${esc(cms2.themeVariant)}</div>` : ''}
+        <div style="font-size:12px">Confidence: ${pct(cms2.confidence)}</div>
+        ${(cms2.evidence||[]).map(ev => `<div class="muted" style="font-size:12px">  • ${esc(ev)}</div>`).join('')}
+        ${cms2.clusterId ? `<div style="border-top:1px solid rgba(0,0,0,.2);margin:6px 0"></div>
+          <div style="font-size:11px">Approach: ${esc(cms2.catalogType||'?')}/${esc(cms2.chapterListType||'?')} · Pagination: ${esc(cms2.paginationType||'?')}</div>
+          ${(cms2.samplePlugins||[]).length ? `<div style="font-size:11px;color:var(--tertiary)">Similar plugins: ${cms2.samplePlugins.map(esc).join(', ')}</div>` : ''}` : ''}
+      </div>`;
+  }
+  if ((d.containers||[]).length) {
+    out += `<h2 class="sec">Containers (${d.containers.length})</h2>` + d.containers.map(c => `<div class="card">
+      <div style="display:flex;justify-content:space-between;gap:8px">
+        <span class="mono" style="font-size:12px">${esc(c.selector)}</span>
+        <span class="muted" style="font-size:11px;white-space:nowrap">x${c.count} ${esc(c.purpose)}</span></div>
+      ${(c.possibleFields||[]).map(f => `<div style="margin-top:2px">
+        <div class="mono muted" style="font-size:11px">  ${esc(f.role)}: ${esc(f.selector)}</div>
+        <div style="font-size:11px">    "${esc(String(f.sampleValue).slice(0,60))}"</div></div>`).join('')}
+    </div>`).join('');
+  }
+  if ((d.forms||[]).length) {
+    out += `<h2 class="sec">Forms (${d.forms.length})</h2>` + d.forms.map(f => `<div class="card">
+      <div class="mono" style="font-size:12px">${esc(f.method)} ${esc(f.action)}</div>
+      <div class="muted" style="font-size:11px">  inputs: ${f.inputs.map(esc).join(', ')}</div></div>`).join('');
+  }
+  if (d.pagination) {
+    out += `<h2 class="sec">Pagination</h2><div class="card">
+      <div class="mono" style="font-size:12px">${esc(d.pagination.type)}: ${esc(d.pagination.selector)}</div>
+      <div class="muted" style="font-size:11px">sample: ${esc(d.pagination.sampleUrl)}</div></div>`;
+  }
+  if ((d.embeddedJson||[]).length) {
+    out += `<h2 class="sec">Embedded JSON (${d.embeddedJson.length})</h2>` + d.embeddedJson.map(j => `<div class="card">
+      <div class="mono" style="font-size:12px;font-weight:700">${esc(j.type)}</div>
+      <div class="mono muted" style="font-size:11px;word-break:break-all">${esc(String(j.content).slice(0,200))}</div></div>`).join('');
+  }
+  const selRes = js.selectorResult;
+  if (selRes && selRes.candidates && Object.keys(selRes.candidates).length) {
+    out += `<h2 class="sec">Suggested Selectors</h2>`;
+    const entries = Object.entries(selRes.candidates).sort((a,b) => {
+      const ia = PURPOSE_LABELS.findIndex(p => p[0]===a[0]); const ib = PURPOSE_LABELS.findIndex(p => p[0]===b[0]);
+      return (ia<0?99:ia) - (ib<0?99:ib);
+    });
+    for (const [purpose, candidates] of entries) {
+      out += `<div style="font-size:12px;font-weight:700;margin:8px 0 2px">${esc((PURPOSE_LABELS.find(p=>p[0]===purpose)||[null,purpose])[1])}</div>`;
+      out += candidates.map(c => `<div class="card" style="margin:4px 0">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="mono" style="font-size:12px">${esc(c.selector)}</span>
+          <span style="display:flex;gap:6px;align-items:center">
+            <span class="pill" style="${c.confidence==='high'?'background:var(--primary)':c.confidence==='medium'?'background:var(--tertiary-container);color:var(--on-tertiary-container)':'background:var(--error-container)'}">${esc(c.confidence)}</span>
+            <span class="muted" style="font-size:11px">x${c.matchCount}</span></span></div>
+        <div style="font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"${esc(String(c.sampleText).slice(0,80))}"</div>
+      </div>`).join('');
+    }
+  }
+  const eps = js.endpointSuggestions || [];
+  if (eps.length) {
+    const groupDefs = [
+      ['WordPress AJAX', e => e.source==='WORDPRESS_AJAX_COMBINED'||e.source==='WP_AJAX_URL'],
+      ['API Paths', e => e.source==='API_PATH'],
+      ['Fetch / XHR', e => ['FETCH','AXIOS','JQUERY_AJAX','XHR_OPEN'].includes(e.source)],
+      ['GraphQL', e => e.source==='GRAPHQL_ENDPOINT'],
+      ['WP REST API', e => e.source==='WP_API_SETTINGS'],
+      ['Other', e => !['WORDPRESS_AJAX_COMBINED','WP_AJAX_URL','API_PATH','FETCH','AXIOS','JQUERY_AJAX','XHR_OPEN','GRAPHQL_ENDPOINT','WP_API_SETTINGS'].includes(e.source) && e.confidence!=='low']
+    ];
+    out += `<h2 class="sec">API Endpoints</h2>`;
+    for (const [label, filt] of groupDefs) {
+      const g = eps.filter(filt);
+      if (!g.length) continue;
+      out += `<div class="muted" style="font-size:12px;font-weight:700;margin:6px 0 2px">${label}</div>` +
+        g.map(ep => `<div class="card" style="margin:3px 0">
+          <div class="mono" style="font-size:12px;word-break:break-all">${esc(ep.url)}</div>
+          <div style="display:flex;gap:10px;font-size:11px"><span>${esc(ep.category)}</span>
+          <span class="${confClass(ep.confidence)}">${esc(ep.confidence)}</span></div></div>`).join('');
+    }
+  }
+  if ((js.jsFiles||[]).length) {
+    const INTERESTING = new Set(['FETCH','AXIOS','WP_AJAX_URL','WP_AJAX_ACTION','WP_API_SETTINGS','API_BASE_VARIABLE','GRAPHQL_ENDPOINT','NEXT_DATA','NUXT_DATA','JSON_LD','API_PATH','WORDPRESS_AJAX_COMBINED']);
+    out += `<h2 class="sec">JS Files</h2>`;
+    for (const f of js.jsFiles) {
+      const interesting = (f.findings||[]).filter(fd => INTERESTING.has(fd.type));
+      if (!interesting.length) continue;
+      out += `<div style="font-size:12px;font-weight:700;margin:6px 0 2px">${esc(f.url.split('/').pop().slice(0,40))}</div>` +
+        interesting.slice(0,3).map(fd => `<div class="mono" style="font-size:12px">  ${esc(fd.type.slice(0,16))}: ${esc(fd.value.slice(0,80))}</div>`).join('');
+    }
+  }
+  return out;
+}
+
+/* ── Patterns tab ── */
+async function mountPatterns(host, p) {
+  host.innerHTML = `<div style="padding:40px;display:flex;justify-content:center"><span class="spinner" style="width:26px;height:26px;border-color:var(--primary);border-top-color:transparent"></span></div>`;
+  try {
+    const res = await api('/api/patterns/' + encodeURIComponent(p.id));
+    if (res.error) { host.innerHTML = `<div class="err-text">${esc(res.error)}</div>`; return; }
+    const s = res.summary, matches = res.matches || [], clusters = res.allClusters || [];
+    let html = `<h2 class="sec" style="margin-top:0">Pattern Analysis</h2>
+      <div style="font-weight:600;font-size:14px">Plugin: ${esc(s.pluginName)} (${esc(s.pluginId)})</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Functions: ${s.functions.length} / ${s.functions.map(esc).join(', ')}</div>
+      <h2 class="sec">Characteristics:</h2>
+      <div>  API: ${s.hasApiPatterns?'✓':'✗'} / WordPress: ${s.hasWordPressPatterns?'✓':'✗'} / Custom encoding: ${s.hasCustomEncoding?'✓':'✗'}</div>
+      ${s.charset ? `<div>  Charset: ${esc(s.charset)}</div>` : ''}
+      <h2 class="sec">Matched Clusters:</h2>`;
+    if (!matches.length) html += `<div class="err-text">No clusters matched</div>`;
+    else html += matches.map(m => `<div class="card">
+        <div style="display:flex;justify-content:space-between">
+          <span>${esc(m.cluster.name)}</span>
+          <span style="color:${confColor(m.confidence)};font-weight:600">${pct(m.confidence)}</span></div>
+        <div class="muted" style="font-size:12px">${esc(m.cluster.description)}</div>
+        <div style="font-size:11px;margin-top:2px">Probes: ${m.matchedProbes}/${m.totalProbes}</div>
+        ${(m.cluster.samplePlugins||[]).length ? `<div class="muted" style="font-size:11px">Examples: ${m.cluster.samplePlugins.map(esc).join(', ')}</div>` : ''}
+      </div>`).join('');
+    html += `<h2 class="sec">All Clusters</h2>` + clusters.map(cl => {
+      const isM = matches.some(m => m.cluster.id === cl.id);
+      return `<div class="card" style="margin:3px 0;${isM?'background:var(--primary-container)':''}">
+        <div style="font-size:13px">${isM?'▶ ':''}${esc(cl.name)}</div></div>`;
+    }).join('');
+    host.innerHTML = html;
+  } catch (e) { host.innerHTML = `<div class="err-text">${esc(e.message)}</div>`; }
+}
+
+/* ── New Plugin page ── */
+function mountNewPlugin(c) {
+  c.innerHTML = `<div class="detail"><div class="scrollpad" id="npHost" style="max-width:820px">
+    <h1 class="big">Create New Plugin</h1>
+    <div class="muted" style="font-size:14px;margin-bottom:20px">Analyze a novel website — pages, selectors, JSON APIs and runtime network requests — and generate a working NoveLA Lua plugin, validated live.</div>
+
+    <div class="field"><label>Website URL</label><input type="text" id="npUrl" placeholder="https://example-novel-site.com" oninput="npAutoName(this.value)"></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div class="field" style="flex:1;min-width:180px"><label>Plugin Name</label><input type="text" id="npName" oninput="npValidate()"></div>
+      <div class="field" style="flex:1;min-width:180px"><label>Plugin ID</label><input type="text" id="npId" oninput="npValidate()"></div>
+      <div class="field" style="width:160px"><label>Search query</label><input type="text" id="npQuery" value="novel"></div>
+    </div>
+    <div class="row" style="margin-bottom:16px">
+      <button class="btn filled" id="npBtn" disabled onclick="startGenerate()">Analyze &amp; Generate Plugin</button>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--on-surface-var)">
+        <input type="checkbox" id="npUseCapture" style="width:auto">Use captured pages (protected site)
+      </label>
+      <span class="muted" id="npHint" style="font-size:12px">Crawls home → search → book → chapter, probes APIs, then validates the result live.</span>
+    </div>
+
+    <div id="npProgress" class="hidden">
+      <div class="card" style="display:flex;align-items:center;gap:10px">
+        <span class="spinner" style="border-color:var(--primary);border-top-color:transparent;width:18px;height:18px"></span>
+        <b id="npPhase">starting…</b><span class="muted" style="font-size:12px" id="npElapsed"></span>
+      </div>
+      <pre class="out" id="npSteps" style="max-height:220px;margin-top:8px"></pre>
+    </div>
+
+    <div id="npResult"></div>
+
+    <details id="npProtectedBox" style="margin-top:18px">
+      <summary>🔒 Protected site (Cloudflare)? Capture it from your own browser →</summary>
+      <div class="card" style="margin-top:8px">
+        <ol style="font-size:12px;color:var(--on-surface-var);margin:4px 0 10px;padding-left:20px;line-height:1.7">
+          <li>Create two bookmarks with these URLs (copy buttons below).</li>
+          <li>Open the protected site in this browser and pass verification.</li>
+          <li>Tap <b>PDS Recorder</b> once — it arms request capture for that tab.</li>
+          <li>Visit pages normally: catalog, search results, one book, one chapter.</li>
+          <li>After each visited page tap <b>PDS Send</b> to push DOM + captured network requests here. Re-arm the recorder after full page navigations.</li>
+          <li>Come back here, tick “Use captured pages”, and run Analyze &amp; Generate.</li>
+        </ol>
+        <div class="row">
+          <button class="btn" onclick="copyBm('rec')">Copy PDS Recorder</button>
+          <button class="btn" onclick="copyBm('snd')">Copy PDS Send</button>
+          <button class="btn ghost text" onclick="clearCaptured()">Clear captured</button>
+        </div>
+        <div class="muted mono" id="capturedList" style="font-size:11px;margin-top:8px">no pages captured yet</div>
+      </div>
+    </details>
+  </div></div>`;
+  refreshCaptured();
+}
+const BM_REC = "javascript:(function(){if(window.__pdsRec){alert('Recorder already armed');return}window.__pdsRec=[];" +
+  "var of=window.fetch;window.fetch=function(){var u=arguments[0];try{u=(typeof u==='string')?u:u.url}catch(e){}" +
+  "var e={m:'GET',u:String(u),s:0};window.__pdsRec.push(e);" +
+  "return of.apply(this,arguments).then(function(r){e.s=r.status;return r})};" +
+  "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__m=m;this.__u=u;oo.apply(this,arguments)};" +
+  "var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){var x=this;" +
+  "this.addEventListener('load',function(){try{window.__pdsRec.push({m:x.__m,u:x.__u,s:x.status})}catch(e){}});os.apply(this,arguments)};" +
+  "alert('PDS Recorder armed — browse pages now, then use PDS Send.')})()";
+const BM_SND = "javascript:(function(){" +
+  "var recs=(window.__pdsRec||[]).map(function(r){return{method:r.m,url:r.u,status:r.s}});" +
+  "fetch('http://localhost:8080/api/capture/page',{method:'POST',headers:{'Content-Type':'application/json'}," +
+  "body:JSON.stringify({url:location.href,html:'<!DOCTYPE html>'+document.documentElement.outerHTML,requests:recs})})" +
+  ".then(function(r){return r.json()}).then(function(j){j.success===false?alert('Error: '+j.error):" +
+  "alert('Sent! Studio now holds '+j.pagesReceived+' captured page(s).')})" +
+  ".catch(function(e){alert('Cannot reach localhost:8080 — '+e)})})();";
+function copyBm(kind) {
+  const code = kind === 'rec' ? BM_REC : BM_SND;
+  const ta = document.createElement('textarea');
+  ta.value = code; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch {}
+  ta.remove();
+}
+async function refreshCaptured() {
+  try {
+    const list = await api('/api/capture/list');
+    const el = $('#capturedList');
+    if (!el) return;
+    el.innerHTML = list.length
+      ? list.map(p => `✓ ${esc(p.url.slice(0,70))} — ${p.bytes}b, ${p.requests} requests`).join('<br>')
+      : 'no pages captured yet';
+  } catch {}
+}
+async function clearCaptured() { await postJson('/api/capture/clear', {}); refreshCaptured(); }
+function npAutoName(v) {
+  if (v && $('#npName').value === '') {
+    const host = v.replace(/^https?:\/\//,'').split('/')[0].split('.').filter(w => w !== 'www').slice(0, -1);
+    const word = (host[host.length-1] || v.split('/')[2] || 'site');
+    $('#npName').value = word.charAt(0).toUpperCase() + word.slice(1).replace(/[^a-zA-Z0-9]/g,'');
+    $('#npId').value = String(word).toLowerCase().replace(/[^a-z0-9]/g,'_');
+  }
+  npValidate();
+}
+function npValidate() {
+  $('#npBtn').disabled = !($('#npUrl').value.trim() && $('#npName').value.trim() && $('#npId').value.trim());
+}
+let npPollTimer = null;
+async function startGenerate() {
+  const url = $('#npUrl').value.trim();
+  const query = $('#npQuery').value.trim() || 'novel';
+  const useCapture = $('#npUseCapture').checked;
+  setStatus('Generating plugin from ' + url + ' …');
+  let res;
+  try {
+    res = await postJson('/api/generator/start', {url, query, name: $('#npName').value.trim(), id: $('#npId').value.trim(), useCapture});
+  } catch (e) { showError(e.message); return; }
+  $('#npProgress').classList.remove('hidden');
+  $('#npResult').innerHTML = '';
+  $('#npBtn').disabled = true;
+  const jobId = res.jobId;
+  if (npPollTimer) clearInterval(npPollTimer);
+  npPollTimer = setInterval(async () => {
+    try {
+      const st = await api('/api/generator/status/' + jobId);
+      $('#npPhase').textContent = st.phase;
+      $('#npElapsed').textContent = Math.round(st.elapsedMs/1000) + 's';
+      $('#npSteps').textContent = (st.steps||[]).map(s => s.msg).join('\n');
+      $('#npSteps').scrollTop = $('#npSteps').scrollHeight;
+      if (st.phase === 'done' || st.phase === 'error') {
+        clearInterval(npPollTimer); npPollTimer = null;
+        $('#npBtn').disabled = false;
+        st.phase === 'done' ? renderGenResult(jobId, st.result) : renderGenFailure(st);
+      }
+    } catch (e) {}
+  }, 1200);
+}
+function renderGenFailure(st) {
+  setStatus('Generation failed');
+  $('#npPhase').textContent = 'failed';
+  $('#npResult').innerHTML = `<div class="error-box" style="margin-top:12px">${esc(st.error || 'generation failed')}
+    ${String(st.error||'').match(/protected|Cloudflare/i) ? '<br><br>Tip: expand <b>“Protected site”</b> below and use the browser capture workflow.' : ''}</div>`;
+}
+let currentJobId = null;
+function renderGenResult(jobId, r) {
+  currentJobId = jobId;
+  setStatus(r.overallPass ? 'Plugin generated and validated successfully ✓' : 'Generated, but validation found problems');
+  const matrix = (r.validation||[]).map(v => `<tr>
+      <td>${v.ok?'<span class="st-ok">✓</span>':'<span class="st-err">✗</span>'}</td>
+      <td class="mono">${esc(v.function)}</td>
+      <td>${esc(v.detail)}</td><td class="muted">${v.durationMs}ms</td></tr>`).join('');
+  const strat = Object.entries(r.strategySummary||{}).map(([k,v]) =>
+      `<tr><td class="mono">${esc(k)}</td><td class="mono" style="word-break:break-all">${esc(v)}</td></tr>`).join('');
+  $('#npResult').innerHTML = `
+    <div class="card" style="${r.overallPass?'background:#1e3a2f;border-left:3px solid var(--ok)':'background:#4a3038;border-left:3px solid var(--err)'}">
+      <b>${r.overallPass?'✓ Plugin generated & validated':'⚠ Generated but not fully validated'}</b>
+      <div class="muted" style="font-size:12px;margin-top:4px">${r.variantsTried} variant(s) tried · staged file: ${r.stagedFile?esc(r.stagedFile):'—'}</div>
+    </div>
+    <h2 class="sec">Validation matrix</h2>
+    <table><tr><th></th><th>Function</th><th>Detail</th><th>Time</th></tr>${matrix}</table>
+    <h2 class="sec">Strategies used</h2>
+    <table><tr><th>Function</th><th>Strategy / selectors</th></tr>${strat}</table>
+    <details style="margin-top:10px"><summary>Generated Lua source (${(r.luaCode||'').length} bytes)</summary>
+      <pre class="out" id="npLua" style="max-height:420px">${esc(r.luaCode)}</pre></details>
+    <div class="row" style="margin-top:14px">
+      <button class="btn filled" onclick="saveToLibrary('${jobId}')">Save to library & reload plugins</button>
+      <button class="btn" onclick="downloadLua()">Download .lua</button>
+      ${(r.validation||[]).some(v=>v.ok&&['getCatalogList','getChapterList'].includes(v.function))?'':'<span class="muted" style="font-size:12px">Fix selectors in the code above or try the protected-site flow.</span>'}
+    </div>
+    <div id="npSaveStatus" class="muted" style="margin-top:6px;font-size:12px"></div>`;
+  window.__lastLua = r.luaCode;
+  window.scrollTo(0, document.body.scrollHeight);
+}
+function downloadLua() {
+  const blob = new Blob([window.__lastLua || ''], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = ($('#npId')?.value || 'generated') + '.lua';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+async function saveToLibrary(jobId) {
+  const out = $('#npSaveStatus');
+  out.innerHTML = '<span class="spinner"></span> saving & reloading …';
+  try {
+    const stageRes = await postJson('/api/generator/stage', {jobId});
+    if (!stageRes.ok) throw new Error(stageRes.error || 'staging failed');
+    const saveRes = await postJson('/api/generator/save', {jobId});
+    if (saveRes.ok) {
+      await loadPlugins();
+      S.selectedId = saveRes.pluginId;
+      out.innerHTML = `<span class="ok-text">✓ Saved as ${esc(saveRes.pluginId)} (${esc(saveRes.language)}) — loaded into Plugins list.</span>`;
+    } else out.textContent = 'Error: ' + (saveRes.error || 'save failed');
+  } catch (e) { out.textContent = 'Error: ' + e.message; }
+}
+
+/* ════════════════ boot ════════════════ */
+(async function boot() {
+  renderSidebar();
+  try { S.functionDefs = await api('/api/functions'); } catch {}
+  await loadPlugins().catch(() => {});
+  navTo('PLUGINS');
+  pollLogs();
+  setInterval(pollLogs, 1500);
+})();
+</script>
+</body>
+</html>

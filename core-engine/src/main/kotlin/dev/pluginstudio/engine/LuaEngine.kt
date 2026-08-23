@@ -17,6 +17,7 @@ import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
 import kotlinx.coroutines.*
 
@@ -42,6 +43,8 @@ class LuaEngine(
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build(),
     var onHttpLog: (HttpLogEntry) -> Unit = {}
 ) {
