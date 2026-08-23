@@ -899,11 +899,15 @@ function mountNewPlugin(c) {
     </div>
 
     <div id="npProgress" class="hidden">
-      <div class="card" style="display:flex;align-items:center;gap:10px">
+      <div class="card" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="spinner" style="border-color:var(--primary);border-top-color:transparent;width:18px;height:18px"></span>
         <b id="npPhase">starting…</b><span class="muted" style="font-size:12px" id="npElapsed"></span>
+        <div class="muted mono" id="npLatest" style="flex-basis:100%;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
       </div>
-      <pre class="out" id="npSteps" style="max-height:220px;margin-top:8px"></pre>
+      <details id="npStepsBox" open style="margin-top:8px">
+        <summary style="font-size:13px"><b>Progress log</b> <span class="muted" id="npStepCount">(0 steps)</span></summary>
+        <pre class="out" id="npSteps" style="max-height:260px"></pre>
+      </details>
     </div>
 
     <div id="npResult"></div>
@@ -995,8 +999,20 @@ async function startGenerate() {
       const st = await api('/api/generator/status/' + jobId);
       $('#npPhase').textContent = st.phase;
       $('#npElapsed').textContent = Math.round(st.elapsedMs/1000) + 's';
-      $('#npSteps').textContent = (st.steps||[]).map(s => s.msg).join('\n');
-      $('#npSteps').scrollTop = $('#npSteps').scrollHeight;
+      const steps = st.steps || [];
+      $('#npSteps').textContent = steps.map(s => s.msg).join('\n');
+      $('#npStepCount').textContent = '(' + steps.length + ' steps)';
+      const last = steps[steps.length - 1];
+      if (last) $('#npLatest').textContent = '› ' + last.msg;
+      const box = $('#npSteps');
+      box.scrollTop = box.scrollHeight;
+      if (st.phase === 'done') {
+        $('#npPhase').innerHTML = '<span class="st-ok">✓ completed</span>';
+        document.getElementById('npStepsBox').open = false;
+      } else if (st.phase === 'error') {
+        $('#npPhase').innerHTML = '<span class="st-err">✗ failed</span>';
+        document.getElementById('npStepsBox').open = true;
+      }
       if (st.phase === 'done' || st.phase === 'error') {
         clearInterval(npPollTimer); npPollTimer = null;
         $('#npBtn').disabled = false;
