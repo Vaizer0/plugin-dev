@@ -1,7 +1,15 @@
 package dev.pluginstudio.gen
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * Live-validates candidate API endpoints discovered by JS scanning or captured
@@ -12,48 +20,62 @@ class ApiProber(private val fetcher: HttpFetcher = HttpFetcher()) {
     private val assetHints = listOf("/assets/", "/images/", "/img/", "/css/", "/js/", "/fonts/",
         "/static/", "/dist/", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".ttf", ".ico")
 
-    /** Probe endpoints and return only usable JSON list APIs (best first). */
+    /** Probe endpoints concurrently and return only usable JSON list APIs (best first). */
     suspend fun probe(
         base: String,
         candidates: List<Pair<String, String>>,   // url to method ("GET"/"POST")
         searchQuery: String,
         onStep: (String) -> Unit = {}
     ): List<ApiProbe> = withContext(Dispatchers.IO) {
+        val host = hostOf(base)
         val seen = mutableSetOf<String>()
-        val results = mutableListOf<ApiProbe>()
-        var tried = 0
-        for ((rawUrl, method) in candidates) {
-            if (tried >= 12 || results.size >= 4) break
+        val toProbe = candidates.mapNotNull { (rawUrl, method) ->
             val abs = fetcher.resolve(base, rawUrl.trim().trim('"', '\'', '`'))
-            if (abs.isBlank() || !abs.startsWith("http")) continue
-            if (assetHints.any { abs.lowercase().contains(it) }) continue
-            val key = "$method $abs"
-            if (!seen.add(key)) continue
-            // allow same-site endpoints and explicitly-absolute candidates (browser captures)
-            val host = hostOf(base)
+            if (abs.isBlank() || !abs.startsWith("http")) return@mapNotNull null
+            if (assetHints.any { abs.lowercase().contains(it) }) return@mapNotNull null
             val isSameSite = host.isBlank() || abs.contains(host)
             val wasAbsolute = rawUrl.startsWith("http")
-            if (!isSameSite && !wasAbsolute) continue
-            seenProbe(onStep, abs, method)
-            tried++
-            try {
-                val resp = if (method == "POST")
-                    fetcher.post(abs, "action=${extractAjaxAction(abs)}")
-                else fetcher.get(abs)
-                if (!resp.ok || resp.blocked) { note(onStep, abs, resp.status); continue }
-                val body = resp.body.trim()
-                val isJson = resp.contentType.contains("json", true) ||
-                    body.startsWith("{") || body.startsWith("[")
-                if (!isJson) { note(onStep, abs, resp.status); continue }
-                val shape = analyzeJsonShape(body)
-                if (shape.sampleCount <= 0) { note(onStep, abs, resp.status); continue }
-                results.add(ApiProbe(abs, method, resp.status, resp.contentType, true,
-                    shape.listField, shape.titleField, shape.urlOrSlugField, shape.coverField,
-                    shape.sampleCount, source = "probe"))
-                onStep("✓ working API: $abs (${shape.sampleCount} items)")
-            } catch (_: Exception) { }
+            if (!isSameSite && !wasAbsolute) return@mapNotNull null
+            val key = "$method $abs"
+            if (!seen.add(key)) return@mapNotNull null
+            abs to method
+        }.take(8)
+
+        onStep("Testing ${toProbe.size} endpoint(s) in parallel …")
+
+        coroutineScope {
+            val sem = Semaphore(6)
+            val results = java.util.Collections.synchronizedList(mutableListOf<ApiProbe>())
+            val jobs = toProbe.map { (abs, method) ->
+                async {
+                    sem.withPermit {
+                        try {
+                            val resp = if (method == "POST")
+                                fetcher.post(abs, "action=${extractAjaxAction(abs)}", timeoutSec = 7)
+                            else fetcher.get(abs, timeoutSec = 7)
+                            if (!resp.ok || resp.blocked || resp.status == 0) return@withPermit
+                            val body = resp.body.trim()
+                            val isJson = resp.contentType.contains("json", true) ||
+                                body.startsWith("{") || body.startsWith("[")
+                            if (!isJson) { note(onStep, abs, resp.status); return@withPermit }
+                            val shape = analyzeJsonShape(body)
+                            if (shape.sampleCount <= 0 || shape.titleField == null) { note(onStep, abs, resp.status); return@withPermit }
+                            val probe = ApiProbe(abs, method, resp.status, resp.contentType, true,
+                                shape.listField, shape.titleField, shape.urlOrSlugField, shape.coverField,
+                                shape.sampleCount, source = "probe")
+                            var added = false
+                            synchronized(results) {
+                                if (results.size < 4) { results.add(probe); added = true }
+                            }
+                            if (added) onStep("✓ working API: $abs (${shape.sampleCount} items)")
+                        } catch (_: Exception) { }
+                    }
+                }
+            }
+            // hard deadline for the whole probe phase
+            withTimeoutOrNull(15_000) { jobs.joinAll() }
+            results.sortedByDescending { it.sampleCount }
         }
-        results
     }
 
     /** Turn a validated probe into a concrete search strategy, verifying one real query. */

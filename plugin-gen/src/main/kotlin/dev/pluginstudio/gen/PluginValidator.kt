@@ -4,7 +4,10 @@ import dev.pluginstudio.engine.LuaEngine
 import dev.pluginstudio.engine.PluginLoader
 import dev.pluginstudio.engine.models.Response
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import java.nio.file.Files
 import java.nio.file.Path
@@ -20,8 +23,8 @@ class PluginValidator(
         OkHttpClient.Builder()
             .followRedirects(true)
             .followSslRedirects(true)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
             .build()
     )
 ) {
@@ -58,12 +61,18 @@ class PluginValidator(
                     }
                     onStep("Validating $name …")
                     val t0 = System.currentTimeMillis()
-                    val (ok, detail) = try { block() } catch (e: Exception) { false to (e.message ?: e.toString()) }
-                    entries.add(ValidationEntry(name, ok, detail, System.currentTimeMillis() - t0))
+                    val (ok, detail) = try {
+                        withTimeout(12_000) { block() }
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        false to "timed out after 12s"
+                    } catch (e: Exception) { false to (e.message ?: e.toString()) }
+                    synchronized(entries) {
+                        entries.add(ValidationEntry(name, ok, detail, System.currentTimeMillis() - t0))
+                    }
                     onStep("${if (ok) "✓" else "✗"} $name — $detail")
                 }
 
-                // 1. catalog
+                // 1. catalog (gate for everything else)
                 step("getCatalogList") {
                     when (val r = adapter.getCatalogList(0)) {
                         is Response.Error -> false to r.message
@@ -76,8 +85,10 @@ class PluginValidator(
                     }
                 }
                 if (!firstBookUrl.isNullOrBlank()) {
-                    // 2. book metadata (needs ≥2 of 4 to count as working)
-                    var metaHits = 0; var metaTotal = 0
+                    // Book-page functions share the plugin's internal page cache,
+                    // so they are cheap once the first one warms it. Chapter-text
+                    // and search hit different URLs → run them concurrently.
+                    var metaHits = 0
                     step("getBookTitle") {
                         val r = adapter.getBookTitle(firstBookUrl!!)
                         val s = (r as? Response.Success<*>)?.data as? String
@@ -105,7 +116,6 @@ class PluginValidator(
                     }
                     entries.add(ValidationEntry("bookMetadata", metaHits >= 2, "$metaHits/4 fields", 0))
 
-                    // 3. chapters
                     step("getChapterList") {
                         val r = adapter.getChapterList(firstBookUrl!!)
                         @Suppress("UNCHECKED_CAST")
@@ -113,35 +123,36 @@ class PluginValidator(
                         firstChapterUrl = l.firstOrNull()?.url
                         (r !is Response.Error && l.isNotEmpty()) to "${l.size} chapters"
                     }
-                    // 4. chapter text via long-timeout fetcher + plugin extraction
-                    if (!firstChapterUrl.isNullOrBlank() || adapter.hasFunction("getChapterText")) {
-                        step("getChapterText") {
-                            val chUrl = firstChapterUrl ?: firstBookUrl!!
-                            var http = fetcher.get(chUrl)
-                            if (!http.ok) {
-                                onStep("  retrying chapter fetch ($chUrl) …")
-                                http = fetcher.get(chUrl)
-                            }
-                            if (!http.ok || http.blocked)
-                                return@step false to "HTTP ${http.status} fetching chapter (${http.body.take(60)}) url=$chUrl"
-                            val text = adapter.getChapterTextRaw(http.body, chUrl)
-                            val len = text?.trim()?.length ?: 0
-                            (len > 200) to "$len chars extracted"
-                        }
-                    }
-                }
 
-                // 5. search
-                if (adapter.hasFunction("getCatalogSearch")) {
-                    step("getCatalogSearch") {
-                        when (val r = adapter.getCatalogSearch(0, testQuery)) {
-                            is Response.Error -> false to r.message
-                            is Response.Success<*> -> {
-                                @Suppress("UNCHECKED_CAST")
-                                val list = (r.data as dev.pluginstudio.engine.models.PagedList<dev.pluginstudio.engine.models.BookResult>).list
-                                (list.isNotEmpty()) to "${list.size} results for \"$testQuery\""
+                    // chapter text and search hit different URLs → parallel
+                    coroutineScope {
+                        val textJob = async {
+                            if (firstChapterUrl.isNullOrBlank() && !adapter.hasFunction("getChapterText")) return@async
+                            step("getChapterText") {
+                                val chUrl = firstChapterUrl ?: firstBookUrl!!
+                                var http = fetcher.get(chUrl, timeoutSec = 15)
+                                if (!http.ok) http = fetcher.get(chUrl, timeoutSec = 15)
+                                if (!http.ok || http.blocked)
+                                    return@step false to "HTTP ${http.status} fetching chapter (${http.body.take(60)}) url=$chUrl"
+                                val text = adapter.getChapterTextRaw(http.body, chUrl)
+                                val len = text?.trim()?.length ?: 0
+                                (len > 200) to "$len chars extracted"
                             }
                         }
+                        val searchJob = async {
+                            if (!adapter.hasFunction("getCatalogSearch")) return@async
+                            step("getCatalogSearch") {
+                                when (val r = adapter.getCatalogSearch(0, testQuery)) {
+                                    is Response.Error -> false to r.message
+                                    is Response.Success<*> -> {
+                                        @Suppress("UNCHECKED_CAST")
+                                        val list = (r.data as dev.pluginstudio.engine.models.PagedList<dev.pluginstudio.engine.models.BookResult>).list
+                                        (list.isNotEmpty()) to "${list.size} results for \"$testQuery\""
+                                    }
+                                }
+                            }
+                        }
+                        textJob.await(); searchJob.await()
                     }
                 }
 

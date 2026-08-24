@@ -3,6 +3,9 @@ package dev.pluginstudio.gen
 import dev.pluginstudio.analyzer.DomAnalyzer
 import dev.pluginstudio.analyzer.SiteAnalyzer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -15,7 +18,7 @@ import org.jsoup.nodes.Document
 class SiteCrawler(
     private val fetcher: HttpFetcher = HttpFetcher(),
     private val domAnalyzer: DomAnalyzer = DomAnalyzer(),
-    private val siteAnalyzer: SiteAnalyzer = SiteAnalyzer()
+    private val siteAnalyzer: SiteAnalyzer = SiteAnalyzer(maxExternalScripts = 2)
 ) {
     data class CrawlResult(
         val success: Boolean,
@@ -48,50 +51,67 @@ class SiteCrawler(
         val pages = mutableListOf(snapshot(homeUrl, homeResp.body, "home", homeDoc))
         onStep("Home page OK (${homeResp.body.length} bytes) → $effectiveBase")
 
-        // ── 2. book page ──
+        // ── 2+3+4. book / chapter / search — fetched concurrently ──
         onStep("Looking for a book/novel link …")
         val bookLinks = findBookLinks(homeDoc, base)
-        var bookSnap: PageSnapshot? = null
-        for (link in bookLinks.take(3)) {
-            val r = fetcher.get(link)
-            if (!r.ok || r.blocked) continue
-            val doc = Jsoup.parse(r.body, link)
-            val snap = snapshot(link, r.body, "book", doc)
-            pages.add(snap)
-            if (hasChapterLinks(doc)) { bookSnap = snap; break }
-            if (bookSnap == null) bookSnap = snap
-        }
-        onStep(if (bookSnap != null) "Book page captured: ${bookSnap.url}" else "No book page found from home links")
 
-        // ── 3. chapter page ──
-        var chapterSnap: PageSnapshot? = null
-        if (bookSnap != null) {
-            onStep("Following a chapter link …")
-            val chLink = firstChapterLink(Jsoup.parse(bookSnap.html, bookSnap.url), bookSnap.url)
-            if (chLink != null) {
-                val r = fetcher.get(chLink)
-                if (r.ok && !r.blocked) {
-                    chapterSnap = snapshot(chLink, r.body, "chapter", Jsoup.parse(r.body, chLink))
-                    pages.add(chapterSnap)
-                    onStep("Chapter page captured: $chLink")
-                } else onStep("Chapter fetch failed (${r.status})")
-            } else onStep("No chapter link found on the book page")
-        }
+        return@withContext coroutineScope {
+            val searchUrl = discoverSearchUrl(homeDoc, base, searchQuery)
+            val deadline = System.currentTimeMillis() + 45_000   // hard budget for the whole crawl
 
-        // ── 4. search results page ──
-        onStep("Probing search …")
-        val searchUrl = discoverSearchUrl(homeDoc, base, searchQuery)
-        if (searchUrl != null) {
-            val r = fetcher.get(searchUrl)
-            if (r.ok && !r.blocked) {
-                val doc = Jsoup.parse(r.body, searchUrl)
-                if (countBookishLinks(doc) >= 2 || looksLikeResults(doc, searchQuery)) {
-                    pages.add(snapshot(searchUrl, r.body, "search", doc))
-                    onStep("Search results captured: $searchUrl")
-                } else onStep("Search URL returned no results — will still probe JSON APIs")
-            } else onStep("Search fetch failed (${r.status})")
-        } else onStep("No obvious search form/path found — will still probe JSON APIs")
-        CrawlResult(true, baseUrl = effectiveBase, pages = pages)
+            val bookJob = async {
+                val snaps = bookLinks.take(3).map { link -> async {
+                    if (System.currentTimeMillis() > deadline) return@async null
+                    val r = fetcher.get(link, timeoutSec = 15)
+                    if (!r.ok || r.blocked) null
+                    else snapshot(link, r.body, "book", Jsoup.parse(r.body, link)) to hasChapterLinks(Jsoup.parse(r.body, link))
+                } }.awaitAll().filterNotNull()
+                val best = snaps.firstOrNull { it.second }?.first ?: snaps.firstOrNull()?.first
+                pages.addAll(snaps.map { it.first })
+                best
+            }
+            val chapterJob = async {
+                val bs = bookJob.await()
+                if (bs == null || System.currentTimeMillis() > deadline) return@async null
+                val doc = Jsoup.parse(bs.html, bs.url)
+                var chLink = firstChapterLink(doc, bs.url)
+                // JS-driven chapter lists often live on a /chapters sub-page.
+                if (chLink == null && !bs.url.endsWith("/chapters")) {
+                    val sub = bs.url.trimEnd('/') + "/chapters"
+                    val sr = fetcher.get(sub, timeoutSec = 12)
+                    if (sr.ok && !sr.blocked && hasChapterLinks(Jsoup.parse(sr.body, sub))) {
+                        chLink = firstChapterLink(Jsoup.parse(sr.body, sub), sub)
+                        if (chLink == null) chLink = sub
+                        pages.add(snapshot(sub, sr.body, "book", Jsoup.parse(sr.body, sub)))
+                    }
+                }
+                if (chLink == null) return@async null
+                val r = fetcher.get(chLink, timeoutSec = 20)
+                if (!r.ok || r.blocked) { onStep("Chapter fetch failed (${r.status})"); return@async null }
+                val snap = snapshot(chLink, r.body, "chapter", Jsoup.parse(r.body, chLink))
+                pages.add(snap); snap
+            }
+            val searchJob = async {
+                if (searchUrl == null) { onStep("No obvious search form/path found — will still probe JSON APIs"); return@async null }
+                if (System.currentTimeMillis() > deadline) return@async null
+                val r = fetcher.get(searchUrl, timeoutSec = 15)
+                if (!r.ok || r.blocked) { onStep("Search fetch failed (${r.status})"); return@async null }
+                val doc2 = Jsoup.parse(r.body, searchUrl)
+                if (countBookishLinks(doc2) >= 2 || looksLikeResults(doc2, searchQuery)) {
+                    val snap = snapshot(searchUrl, r.body, "search", doc2)
+                    pages.add(snap); snap
+                } else { onStep("Search URL returned no results — will still probe JSON APIs"); null }
+            }
+
+            val bookSnap = bookJob.await()
+            onStep(if (bookSnap != null) "Book page captured: ${bookSnap.url}" else "No book page found from home links")
+            val chapterSnap = chapterJob.await()
+            onStep(if (chapterSnap != null) "Chapter page captured: ${chapterSnap.url}" else "No chapter content captured")
+            val searchSnap = searchJob.await()
+            onStep(if (searchSnap != null) "Search results captured: ${searchSnap.url}" else "")
+
+            CrawlResult(true, baseUrl = effectiveBase, pages = pages)
+        }
     }
 
     /** Build corpus purely from browser-captured snapshots (protected sites). */

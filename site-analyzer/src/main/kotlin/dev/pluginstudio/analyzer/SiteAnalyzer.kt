@@ -17,7 +17,9 @@ class SiteAnalyzer(
         .followSslRedirects(true)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    /** How many same-origin external scripts to download & scan per page. */
+    var maxExternalScripts: Int = 20
 ) {
     private val jsScanner = JsScanner()
     private val selectorAnalyzer = SelectorAnalyzer()
@@ -38,12 +40,12 @@ class SiteAnalyzer(
             jsResults.add(jsScanner.scan(inlineScript, "$pageUrl (inline)"))
         }
 
-        // external scripts — only same-origin
+        // external scripts — only same-origin, capped, each with a whole-call deadline
         val scriptSrcUrls = doc.select("script[src]").eachAttr("src")
             .filter { it.isNotBlank() }
             .map { resolveUrl(pageUrl, it) }
             .filter { isSameHost(it, pageHost) }
-            .take(20)
+            .take(maxExternalScripts)
 
         for (url in scriptSrcUrls) {
             val jsCode = downloadPage(url) ?: continue
@@ -91,7 +93,10 @@ class SiteAnalyzer(
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .build()
-            httpClient.newCall(request).execute().use { response ->
+            // Whole-call deadline: drip-feed/tarpit responses must never stall analysis.
+            val call = httpClient.newCall(request)
+            call.timeout().deadline(10, TimeUnit.SECONDS)
+            call.execute().use { response ->
                 if (!response.isSuccessful) return null
                 response.body?.string()
             }

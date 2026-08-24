@@ -621,7 +621,7 @@ class WebStudio(
                     "steps" to synchronized(job.steps) { job.steps.toList() },
                     "result" to job.result,
                     "error" to job.error,
-                    "elapsedMs" to (System.currentTimeMillis() - job.startedAt)
+                    "elapsedMs" to job.elapsedMs()
                 ))
             }
 

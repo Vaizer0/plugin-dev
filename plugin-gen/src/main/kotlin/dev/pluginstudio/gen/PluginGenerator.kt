@@ -72,7 +72,8 @@ class PluginGenerator(
             // ── 4+5. generate & validate until one passes ──
             var best: GenerationResult? = null
             var tried = 0
-            for (bp in variants.take(3)) {
+            var lastFailSig: Set<String>? = null
+            for (bp in variants.take(2)) {
                 tried++
                 onStep("Generating plugin (variant \"${bp.variantName}\") [catalog=${bp.catalog?.containerSel ?: "-"}, chapters=${bp.chapters?.anchorsSel ?: "-"}, text=${bp.chapterText?.contentSel ?: "-"}] …")
                 val lua = LuaGenerator.generate(bp)
@@ -81,6 +82,14 @@ class PluginGenerator(
                     onStep("✗ variant \"${bp.variantName}\" has a syntax problem, trying next …")
                     continue
                 }
+                // If the failure signature is unchanged, other variants will fail
+                // identically — stop early instead of burning minutes.
+                val failSig = report.entries.filter { !it.ok }.map { it.function }.toSet()
+                if (!report.pass && failSig == lastFailSig) {
+                    onStep("Variant \"${bp.variantName}\" failed identically — stopping variant loop")
+                    break
+                }
+                lastFailSig = failSig
 
                 val summary = strategySummary(bp)
                 // For browser-captured (protected) sites the live server often
@@ -123,8 +132,17 @@ class PluginGenerator(
                 onStep("Variant \"${bp.variantName}\" failed validation — trying next …")
             }
 
-            (best ?: GenerationResult(false, seedUrl, null, emptyMap(), emptyList(), false, "", null, tried,
-                error = "Could not produce a working plugin from this site"))
+            (best ?: run {
+                val missingChapters = variants.firstOrNull()?.chapters == null
+                GenerationResult(false, seedUrl, null, emptyMap(), emptyList(), false, "", null, tried,
+                    error = "Could not produce a working plugin from this site" +
+                        if (missingChapters)
+                            ". This site renders its chapter list with client-side JavaScript, so it is invisible to server-side analysis — use the protected-site (browser capture) flow."
+                        else ""
+                )
+            })
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             GenerationResult(false, seedUrl, null, emptyMap(), emptyList(), false, "", null, 0,
                 e.message ?: e.toString())

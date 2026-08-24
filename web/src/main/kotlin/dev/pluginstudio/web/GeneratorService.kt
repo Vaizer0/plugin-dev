@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -17,7 +18,10 @@ class GenJob(val id: String, val url: String, val query: String) {
     val steps: MutableList<Step> = java.util.Collections.synchronizedList(mutableListOf<Step>())
     @Volatile var result: GenerationResult? = null
     @Volatile var error: String? = null
+    private val startNanos = System.nanoTime()
     val startedAt = System.currentTimeMillis()
+
+    fun elapsedMs(): Long = (System.nanoTime() - startNanos) / 1_000_000
 
     data class Step(val ts: Long, val msg: String)
 
@@ -93,7 +97,11 @@ class GeneratorService(
                 } else null
                 if (captureInput != null) job.step("Using ${captureInput.pages.size} captured page(s) instead of crawling")
                 job.phase = "generate"
-                val result = generator.generate(url, query, idHint, nameHint, captureInput)
+                // Hard cap so a hostile/slow site can never hang a job indefinitely.
+                val result = withTimeoutOrNull(150_000) {
+                    generator.generate(url, query, idHint, nameHint, captureInput)
+                } ?: GenerationResult(false, url, null, emptyMap(), emptyList(), false, "",
+                    null, 0, "Generation exceeded the 2.5-minute budget — use the protected-site (capture) flow for this site")
                 job.result = result
                 job.phase = if (result.success) "done" else "error"
                 if (!result.success) job.error = result.error
