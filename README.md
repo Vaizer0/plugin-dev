@@ -116,6 +116,54 @@ as highest-priority evidence. Because live re-validation may still receive degra
 capture-flow results can be reported as *partially validated* (catalog+search verified live;
 selectors verified against your real captured pages).
 
+
+## Analyze & Generate Plugin (Create → New Plugin)
+
+Three-stage architecture:
+
+```
+Deterministic Site Analyzer   →   Structured Evidence   →   AI Lua Generation
+        ↓
+Real Lua Validation (live)    →   AI Repair (≤3 rounds) →   Validated NoveLA Plugin
+```
+
+1. **Analyze** — the built-in analyzer crawls representative pages (home, search,
+   book details, chapter), probes JS-discovered endpoints live, and distills a
+   compact structured evidence package (containers, selector candidates, forms,
+   pagination, JSON APIs — no raw HTML dumped anywhere).
+2. **AI generation** — an OpenAI-compatible model writes the complete Lua source,
+   grounded in the evidence plus the official NoveLA plugin guide
+   (`external-sources/lua-plugin-guide-en.md`). Models are instructed to never
+   invent endpoints/selectors.
+3. **Live validation & repair** — the generated plugin loads through the real Lua
+   engine and every function runs against the target site. Failures are fed back
+   to the model for repair (max 3 attempts). A plugin counts as success only when
+   catalog/chapters/content actually work.
+4. **Save/export** — stage locally, then "Save to library" copies it into your
+   NoveLA sources folder, updates `index.yaml`, and reloads the Plugins list.
+
+Measured: libread.com end-to-end in ~150s (attempt 1: 7/9 → repair → attempt 2: 8/9 PASS).
+
+## AI providers
+
+Default provider is **OpenCode Zen** (`https://opencode.ai/zen/v1`, OpenAI-compatible):
+
+- `GET /models` works without a key; some `*-free` models also serve completions
+  keylessly (e.g. `hy3-free`). Availability rotates — check the Zen catalog.
+- For guaranteed access create a free API key at opencode.ai and paste it in
+  **⚙ AI Settings**.
+
+**Custom providers**: any OpenAI-compatible endpoint works (OpenRouter, DeepSeek,
+Mistral, local Ollama…). In ⚙ AI Settings add: ID, base URL, API key(s), mode
+(Chat Completions / Responses), default model, max tokens, optional extra headers.
+
+- Multiple keys per provider (comma/newline separated) rotate automatically on 401/429.
+- Keys are stored locally in `.pds-ai.json` (gitignored, chmod 600), never logged,
+  never included in generated plugins.
+- **Test** button runs a tiny live completion so config mistakes surface instantly.
+
+## Browser-assisted capture (protected sites)
+
 ## Generated-plugin testing checklist
 
 After saving, the plugin appears in **Plugins**. Verify in order:
@@ -151,6 +199,10 @@ plugin-dev-studio/
 | First start slow | Gradle downloads dependencies once (~2–5 min). |
 | Build fails on Termux out-of-memory | Ensure ≥2 GB RAM free; close other apps; retry `sh gradlew :web:installDist --no-daemon`. |
 | Orphan process after crash | `plugindevstop` sweeps strays; verify with `pgrep -f MainKt`. |
+| AI error 401 AuthError | Provider needs a key — ⚙ AI Settings → paste it (Zen keys: opencode.ai). |
+| AI error 429 FreeUsageLimitError | Keyless quota exhausted for that model; wait, switch model in Settings, or add a key. |
+| "chapter list rendered client-side" | SPA site: server HTML has no chapters → use capture flow. |
+| Generation slow (>2 min) | Free reasoning models can be slow; pick a faster model in Settings. |
 
 ## Roadmap
 

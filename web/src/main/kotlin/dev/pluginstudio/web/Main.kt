@@ -25,12 +25,14 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.options
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.nio.file.Files
@@ -91,6 +93,7 @@ class WebStudio(
     /** Repo root (parent of the web module) — used for staging generated plugins. */
     private val repoRoot: Path = Path.of(System.getProperty("user.dir"))
     lateinit var generator: GeneratorService
+    val aiSettings = AiSettingsStore(Path.of(System.getProperty("user.dir")).resolve(".pds-ai.json"))
 
     @Volatile
     var sourcesDir: Path = sourcesDirOverride
@@ -119,6 +122,7 @@ class WebStudio(
         }
         generator = GeneratorService(
             repoRoot = repoRoot,
+            aiSettings = aiSettings,
             onPluginsChanged = { cachedReport = null }
         )
     }
@@ -606,7 +610,12 @@ class WebStudio(
                 val idHint = body["id"]?.toString()?.trim()?.ifBlank { null }
                 val nameHint = body["name"]?.toString()?.trim()?.ifBlank { null }
                 val useCapture = body["useCapture"]?.toString() in listOf("true", "1")
-                val job = generator.startJob(url, query, idHint, nameHint, useCapture)
+                val providerId = body["providerId"]?.toString()?.trim()?.ifBlank { null }
+                val model = body["model"]?.toString()?.trim()?.ifBlank { null }
+                val job = generator.startJob(StartParams(
+                    url = url, query = query, idHint = idHint, nameHint = nameHint,
+                    useCapture = useCapture, providerId = providerId, model = model
+                ))
                 call.respondJson(mapOf("jobId" to job.id))
             }
 
@@ -621,8 +630,89 @@ class WebStudio(
                     "steps" to synchronized(job.steps) { job.steps.toList() },
                     "result" to job.result,
                     "error" to job.error,
-                    "elapsedMs" to job.elapsedMs()
+                    "elapsedMs" to job.elapsedMs(),
+                    "aiModel" to job.aiModel,
+                    "attempts" to synchronized(job.attempts) { job.attempts.toList() }
                 ))
+            }
+
+            // ── AI providers ──
+
+            get("/api/ai/providers") {
+                call.respondJson(mapOf(
+                    "default" to aiSettings.defaultProviderId,
+                    "providers" to aiSettings.list().map { it.publicView() }
+                ))
+            }
+
+            post("/api/ai/providers") {
+                val body = parseBody(call.receiveText())
+                val id = body["id"]?.toString()?.trim().orEmpty()
+                    .ifBlank { "custom_" + System.currentTimeMillis() }
+                val name = body["name"]?.toString()?.trim()?.ifBlank { null } ?: id
+                val baseUrl = body["baseUrl"]?.toString()?.trim().orEmpty().trimEnd('/')
+                if (!baseUrl.startsWith("http")) {
+                    call.respondJson(mapOf("error" to "Invalid baseUrl"), HttpStatusCode.BadRequest)
+                    return@post
+                }
+                val mode = if (body["mode"]?.toString() == "responses") "responses" else "chat"
+                @Suppress("UNCHECKED_CAST")
+                val extraHeaders: Map<String, String> =
+                    (body["headers"] as? Map<String, Any>)?.entries?.associate { it.key to it.value.toString() }
+                        ?: emptyMap()
+                val saved = aiSettings.upsert(dev.pluginstudio.gen.ai.ProviderConfig(
+                    id = id, name = name, baseUrl = baseUrl,
+                    apiKey = body["apiKey"]?.toString() ?: "",
+                    mode = mode,
+                    defaultModel = body["defaultModel"]?.toString()?.trim() ?: "",
+                    maxTokens = (body["maxTokens"] as? Number)?.toInt() ?: 8192,
+                    headers = extraHeaders
+                ))
+                call.respondJson(mapOf("ok" to true, "provider" to saved.publicView()))
+            }
+
+            delete("/api/ai/providers/{id}") {
+                val removed = aiSettings.delete(call.parameters["id"] ?: "")
+                call.respondJson(mapOf("ok" to removed))
+            }
+
+            get("/api/ai/models") {
+                val providerId = call.request.queryParameters["provider"] ?: aiSettings.defaultProviderId
+                val provider = aiSettings.get(providerId)
+                if (provider == null) {
+                    call.respondJson(mapOf("error" to "unknown provider"), HttpStatusCode.NotFound)
+                    return@get
+                }
+                val (models, err) = dev.pluginstudio.gen.ai.AiClient().listModels(provider)
+                if (err != null) call.respondJson(mapOf("models" to models, "warning" to err))
+                else call.respondJson(mapOf("models" to models))
+            }
+
+            post("/api/ai/test") {
+                val body = parseBody(call.receiveText())
+                val providerId = body["providerId"]?.toString()?.trim()
+                val model = body["model"]?.toString()?.trim()?.ifBlank { null }
+                val provider = aiSettings.get(providerId ?: "") ?: aiSettings.default()
+                if (provider == null) {
+                    call.respondJson(mapOf("ok" to false, "error" to "no provider configured"))
+                    return@post
+                }
+                val m = model ?: dev.pluginstudio.gen.ai.AiClient().listModels(provider).first.firstOrNull() ?: ""
+                if (m.isBlank()) { call.respondJson(mapOf("ok" to false, "error" to "no model")); return@post }
+                val r = withTimeoutOrNull(60_000) {
+                    dev.pluginstudio.gen.ai.AiClient().complete(
+                        provider, m,
+                        "You are a test endpoint. Reply with exactly: OK",
+                        "Reply with exactly: OK", maxTokens = 16
+                    )
+                }
+                when (r) {
+                    is dev.pluginstudio.gen.ai.AiClient.Result.Ok ->
+                        call.respondJson(mapOf("ok" to true, "reply" to r.text.take(40), "model" to m))
+                    is dev.pluginstudio.gen.ai.AiClient.Result.Fail ->
+                        call.respondJson(mapOf("ok" to false, "error" to r.error.take(200), "model" to m))
+                    null -> call.respondJson(mapOf("ok" to false, "error" to "test timed out"))
+                }
             }
 
             post("/api/generator/stage") {

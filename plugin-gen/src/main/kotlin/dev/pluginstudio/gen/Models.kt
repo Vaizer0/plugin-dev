@@ -76,6 +76,7 @@ data class BookStrategy(
 
 data class ChaptersStrategy(
     val anchorsSel: String,             // selector matching <a> elements of chapters
+    val altSelectors: List<String> = emptyList(),  // tried in order if the primary yields nothing
     val useParsePage: Boolean = false,
     val parsePageUrlTemplate: String? = null   // contains {page} starting at 0/1 decided in lua
 )
@@ -98,6 +99,8 @@ data class PluginBlueprint(
     val book: BookStrategy?,
     val chapters: ChaptersStrategy?,
     val chapterText: ChapterTextStrategy?,
+    /** A verified sample novel-details URL discovered during analysis. */
+    val bookProbeUrl: String? = null,
     val notes: List<String> = emptyList()
 )
 

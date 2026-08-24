@@ -53,7 +53,13 @@ class SiteCrawler(
 
         // ── 2+3+4. book / chapter / search — fetched concurrently ──
         onStep("Looking for a book/novel link …")
-        val bookLinks = findBookLinks(homeDoc, base)
+        var bookLinks = findBookLinks(homeDoc, base)
+        if (bookLinks.isEmpty()) {
+            // Keyword heuristics found nothing → derive book URLs from the
+            // prefixes of chapter links themselves (works for any URL scheme).
+            bookLinks = inferBookLinksFromChapters(homeDoc, base)
+            if (bookLinks.isNotEmpty()) onStep("Inferred ${bookLinks.size} book link(s) from chapter URL patterns …")
+        }
 
         return@withContext coroutineScope {
             val searchUrl = discoverSearchUrl(homeDoc, base, searchQuery)
@@ -194,6 +200,29 @@ class SiteCrawler(
 
     private fun samePage(a: String, b: String) =
         a.substringBefore("#") == b.substringBefore("#") || a == "$b/" || b == "$a/"
+
+    /**
+     * Book URLs are the prefixes of chapter URLs. E.g. given
+     * "/libread/slug-123/chapter-0174" the book is "/libread/slug-123".
+     * Fully data-driven — no URL scheme assumptions.
+     */
+    fun inferBookLinksFromChapters(doc: Document, base: String): List<String> {
+        val freq = HashMap<String, Int>()
+        for (a in doc.select("a[href]")) {
+            val h = a.attr("href")
+            if (!isChapterHref(h)) continue
+            val abs = a.attr("abs:href").ifBlank { fetchResolve(base, h) }
+            if (abs.isBlank()) continue
+            val bookUrl = abs.replace(Regex("/chapter.*$", RegexOption.IGNORE_CASE), "").trimEnd('/')
+            if (bookUrl == abs || bookUrl.length <= base.length + 1) continue
+            freq[bookUrl] = (freq[bookUrl] ?: 0) + 1
+        }
+        return freq.entries
+            .sortedByDescending { it.value }
+            .map { it.key }
+            .filter { u -> doc.select("a[href]").any { (it.attr("abs:href").ifBlank { fetchResolve(base, it.attr("href")) }) == u } }
+            .take(6)
+    }
 
     private fun fetchResolve(base: String, href: String): String =
         if (href.isBlank()) "" else fetcher.resolve(base, href)

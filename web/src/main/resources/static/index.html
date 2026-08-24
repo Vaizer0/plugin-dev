@@ -694,6 +694,7 @@ function mountAnalyze(host, p) {
     </details>`;
   $('#bmCode').textContent = BOOKMARKLET;
 }
+loadProviders();
 const BOOKMARKLET = "javascript:(function(){var s='<!DOCTYPE html>'+document.documentElement.outerHTML;" +
   "fetch('http://localhost:8080/api/analyze/html',{method:'POST',headers:{'Content-Type':'application/json'}," +
   "body:JSON.stringify({url:location.href,html:s})}).then(function(r){return r.json()})" +
@@ -878,6 +879,138 @@ async function mountPatterns(host, p) {
   } catch (e) { host.innerHTML = `<div class="err-text">${esc(e.message)}</div>`; }
 }
 
+/* AI providers */
+let aiProviders = [], aiDefaultProvider = null;
+async function loadProviders() {
+  try {
+    const r = await api('/api/ai/providers');
+    aiProviders = r.providers || [];
+    aiDefaultProvider = r.default;
+    const sel = $('#npProvider');
+    if (sel) {
+      sel.innerHTML = aiProviders.map(p =>
+        `<option value="${esc(p.id)}" ${p.id===aiDefaultProvider?'selected':''}>${esc(p.name)}${p.hasKey?' 🔑':''}</option>`).join('');
+      onProviderChange();
+    }
+    renderProviderCards();
+  } catch {}
+}
+async function onProviderChange() {
+  const pid = $('#npProvider')?.value || aiDefaultProvider;
+  const modelInput = $('#npModel'); if (!modelInput) return;
+  const p = aiProviders.find(x => x.id === pid);
+  modelInput.value = p?.defaultModel || '';
+  const dl = $('#modelList'); dl.innerHTML = '';
+  try {
+    const r = await api('/api/ai/models?provider=' + encodeURIComponent(pid));
+    (r.models || []).slice(0, 80).forEach(m => {
+      const o = document.createElement('option'); o.value = m; dl.appendChild(o);
+    });
+  } catch {}
+}
+function openAiSettings() {
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" onclick="if(event.target===this)this.remove()">
+    <div class="modal" style="width:min(660px,95vw);max-height:92vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <h3>AI Providers</h3>
+      <div id="providerCards"></div>
+      <details style="margin-top:10px"><summary style="color:var(--primary);font-size:13px">➕ Add provider</summary>
+        <div class="card" style="margin-top:8px">
+          <div class="row">
+            <div class="field" style="flex:1"><label>ID *</label><input id="aiId" placeholder="openrouter"></div>
+            <div class="field" style="flex:1"><label>Name</label><input id="aiName" placeholder="OpenRouter"></div>
+          </div>
+          <div class="field"><label>Base URL (OpenAI-compatible)</label><input id="aiBase" placeholder="https://api.openai.com/v1"></div>
+          <div class="field"><label>API key(s) — comma/newline separated for rotation</label><input type="password" id="aiKey"></div>
+          <div class="row">
+            <div class="field" style="width:150px"><label>Mode</label>
+              <select id="aiMode" style="width:100%"><option value="chat">Chat Completions</option><option value="responses">Responses</option></select></div>
+            <div class="field" style="flex:1"><label>Model (default)</label><input id="aiDefModel" placeholder="gpt-4o-mini"></div>
+            <div class="field" style="width:110px"><label>Max tokens</label><input id="aiMaxTok" type="number" value="8192"></div>
+          </div>
+          <div class="field"><label>Extra headers (JSON, optional)</label><input id="aiHeaders" placeholder='{"X-Foo":"bar"}'></div>
+          <button class="btn filled" onclick="addProvider()">Add provider</button>
+        </div>
+      </details>
+      <p class="muted" style="font-size:11px;margin-top:10px">Keys are stored locally in <code>.pds-ai.json</code>, never logged, never included in generated plugins. Multiple keys per provider enable automatic rotation on 401/429.</p>
+    </div></div>`;
+  renderProviderCards();
+}
+function renderProviderCards() {
+  const host = $('#providerCards'); if (!host) return;
+  host.innerHTML = aiProviders.map(p => `
+    <div class="card" data-pid="${esc(p.id)}" style="margin:8px 0">
+      <div class="row" style="justify-content:space-between">
+        <b>${esc(p.name)} <span class="muted mono" style="font-size:11px">(${esc(p.id)})</span></b>
+        ${p.hasKey?`<span class="pill">🔑 ${esc(p.keyHint)}</span>`:'<span class="muted" style="font-size:10px">no key</span>'}
+      </div>
+      <input type="text" data-f="name" value="${esc(p.name)}" placeholder="Name" style="margin-top:6px">
+      <input type="text" data-f="baseUrl" value="${esc(p.baseUrl)}" placeholder="https://…/v1" style="margin-top:6px">
+      <input type="password" data-f="apiKey" placeholder="${p.hasKey?'key saved — leave blank to keep':'API key'}" style="margin-top:6px">
+      <div class="row" style="margin-top:6px">
+        <select data-f="mode" style="flex:1">
+          <option value="chat" ${p.mode!=='responses'?'selected':''}>Chat Completions</option>
+          <option value="responses" ${p.mode==='responses'?'selected':''}>Responses</option>
+        </select>
+        <input type="text" data-f="defaultModel" value="${esc(p.defaultModel||'')}" placeholder="model" style="flex:1">
+        <input type="number" data-f="maxTokens" value="${p.maxTokens||8192}" placeholder="max tokens" style="width:110px">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn filled" style="padding:4px 12px;font-size:11px" onclick="saveProviderCard('${esc(p.id)}')">Save</button>
+        <button class="btn" style="padding:4px 12px;font-size:11px" onclick="testProviderCard('${esc(p.id)}')">Test</button>
+        <button class="btn ghost text" style="padding:4px 8px;font-size:11px;color:var(--err)" onclick="delProvider('${esc(p.id)}')">Delete</button>
+        <span class="muted mono" style="font-size:10px;flex:1;text-align:right" data-role="status"></span>
+      </div>
+    </div>`).join('');
+}
+function cardCfg(pid) {
+  const card = document.querySelector(`.card[data-pid="${pid}"]`);
+  const g = f => card?.querySelector(`[data-f="${f}"]`)?.value ?? '';
+  return {
+    id: pid, name: g('name') || pid, baseUrl: g('baseUrl'),
+    apiKey: g('apiKey'), mode: g('mode'),
+    defaultModel: g('defaultModel'), maxTokens: parseInt(g('maxTokens')) || 8192
+  };
+}
+async function saveProviderCard(pid) {
+  const st = document.querySelector(`.card[data-pid="${pid}"] [data-role="status"]`);
+  st.textContent = 'saving…';
+  try {
+    await postJson('/api/ai/providers', cardCfg(pid));
+    st.textContent = '✓ saved'; st.style.color='var(--ok)';
+    await loadProviders();
+  } catch(e) { st.textContent = '✗ '+e.message; }
+}
+async function testProviderCard(pid) {
+  const st = document.querySelector(`.card[data-pid="${pid}"] [data-role="status"]`);
+  st.textContent = 'testing…';
+  try {
+    // save first so the key/model edits take effect
+    await postJson('/api/ai/providers', cardCfg(pid));
+    await loadProviders();
+    const r = await postJson('/api/ai/test', { providerId: pid });
+    st.innerHTML = r.ok ? `<span style="color:var(--ok)">✓ ${esc(r.model)} → "${esc(r.reply)}"</span>`
+                        : `<span style="color:var(--err)">✗ ${esc((r.error||'').slice(0,90))}</span>`;
+  } catch(e) { st.textContent = '✗ '+e.message; }
+}
+async function addProvider() {
+  let headers = {};
+  try { if ($('#aiHeaders').value.trim()) headers = JSON.parse($('#aiHeaders').value.trim()); }
+  catch(e) { showError('Extra headers must be valid JSON'); return; }
+  const res = await postJson('/api/ai/providers', {
+    id: $('#aiId').value.trim() || undefined,
+    name: $('#aiName').value.trim() || undefined,
+    baseUrl: $('#aiBase').value.trim(),
+    apiKey: $('#aiKey').value,
+    mode: $('#aiMode').value,
+    defaultModel: $('#aiDefModel').value.trim(),
+    maxTokens: parseInt($('#aiMaxTok').value) || 8192,
+    headers
+  });
+  if (res.error) showError(res.error);
+  await loadProviders();
+}
+async function delProvider(id) { await fetch('/api/ai/providers/'+id, {method:'DELETE'}); await loadProviders(); }
+
 /* ── New Plugin page ── */
 function mountNewPlugin(c) {
   c.innerHTML = `<div class="detail"><div class="scrollpad" id="npHost" style="max-width:820px">
@@ -891,11 +1024,21 @@ function mountNewPlugin(c) {
       <div class="field" style="width:160px"><label>Search query</label><input type="text" id="npQuery" value="novel"></div>
     </div>
     <div class="row" style="margin-bottom:16px">
+      <div class="field" style="width:210px"><label>AI Provider</label>
+        <select id="npProvider" onchange="onProviderChange()" style="width:100%"></select>
+      </div>
+      <div class="field" style="flex:1;min-width:220px"><label>AI Model</label>
+        <input type="text" id="npModel" list="modelList" placeholder="auto (first available)">
+        <datalist id="modelList"></datalist>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:16px">
       <button class="btn filled" id="npBtn" disabled onclick="startGenerate()">Analyze &amp; Generate Plugin</button>
       <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--on-surface-var)">
         <input type="checkbox" id="npUseCapture" style="width:auto">Use captured pages (protected site)
       </label>
-      <span class="muted" id="npHint" style="font-size:12px">Crawls home → search → book → chapter, probes APIs, then validates the result live.</span>
+      <button class="btn ghost text" onclick="openAiSettings()">⚙ AI Settings</button>
+      <span class="muted" id="npHint" style="font-size:12px">Analyzer collects evidence → AI writes the Lua (grounded in the official plugin guide) → live validation + up to 3 auto-repairs. Needs an API key in ⚙ Settings for most providers.</span>
     </div>
 
     <div id="npProgress" class="hidden">
@@ -1016,7 +1159,7 @@ async function startGenerate() {
       if (st.phase === 'done' || st.phase === 'error') {
         clearInterval(npPollTimer); npPollTimer = null;
         $('#npBtn').disabled = false;
-        st.phase === 'done' ? renderGenResult(jobId, st.result) : renderGenFailure(st);
+        st.phase === 'done' ? renderGenResult(jobId, st.result, st.attempts||[]) : renderGenFailure(st);
       }
     } catch (e) {}
   }, 1200);
@@ -1028,9 +1171,15 @@ function renderGenFailure(st) {
     ${String(st.error||'').match(/protected|Cloudflare/i) ? '<br><br>Tip: expand <b>“Protected site”</b> below and use the browser capture workflow.' : ''}</div>`;
 }
 let currentJobId = null;
-function renderGenResult(jobId, r) {
+function renderGenResult(jobId, r, attempts) {
   currentJobId = jobId;
   setStatus(r.overallPass ? 'Plugin generated and validated successfully ✓' : 'Generated, but validation found problems');
+  const attemptsHtml = (attempts||[]).length ? `
+    <details style="margin-top:10px"><summary style="font-size:13px;color:var(--primary)">🔧 Generation attempts (${attempts.length})</summary>
+      <table><tr><th>#</th><th>Source</th><th>Result</th><th>Lua</th></tr>
+      ${attempts.map(a => `<tr><td>${a.n}</td><td class="mono">${esc(a.source)}</td>
+        <td>${a.ok?'<span class="st-ok">✓</span>':'<span class="st-err">✗</span>'} ${esc(a.summary)}</td>
+        <td class="muted">${a.luaBytes}b</td></tr>`).join('')}</table></details>` : '';
   const matrix = (r.validation||[]).map(v => `<tr>
       <td>${v.ok?'<span class="st-ok">✓</span>':'<span class="st-err">✗</span>'}</td>
       <td class="mono">${esc(v.function)}</td>
@@ -1040,8 +1189,9 @@ function renderGenResult(jobId, r) {
   $('#npResult').innerHTML = `
     <div class="card" style="${r.overallPass?'background:#1e3a2f;border-left:3px solid var(--ok)':'background:#4a3038;border-left:3px solid var(--err)'}">
       <b>${r.overallPass?'✓ Plugin generated & validated':'⚠ Generated but not fully validated'}</b>
-      <div class="muted" style="font-size:12px;margin-top:4px">${r.variantsTried} variant(s) tried · staged file: ${r.stagedFile?esc(r.stagedFile):'—'}</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">staged file: ${r.stagedFile?esc(r.stagedFile):'—'}</div>
     </div>
+    ${attemptsHtml}
     <h2 class="sec">Validation matrix</h2>
     <table><tr><th></th><th>Function</th><th>Detail</th><th>Time</th></tr>${matrix}</table>
     <h2 class="sec">Strategies used</h2>
@@ -1051,7 +1201,6 @@ function renderGenResult(jobId, r) {
     <div class="row" style="margin-top:14px">
       <button class="btn filled" onclick="saveToLibrary('${jobId}')">Save to library & reload plugins</button>
       <button class="btn" onclick="downloadLua()">Download .lua</button>
-      ${(r.validation||[]).some(v=>v.ok&&['getCatalogList','getChapterList'].includes(v.function))?'':'<span class="muted" style="font-size:12px">Fix selectors in the code above or try the protected-site flow.</span>'}
     </div>
     <div id="npSaveStatus" class="muted" style="margin-top:6px;font-size:12px"></div>`;
   window.__lastLua = r.luaCode;

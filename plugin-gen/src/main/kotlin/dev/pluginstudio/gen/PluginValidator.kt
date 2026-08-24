@@ -36,7 +36,12 @@ class PluginValidator(
     }
 
     /** Load + run. Returns null if the script fails to even load (syntax error). */
-    suspend fun validate(luaCode: String, testQuery: String, onStep: (String) -> Unit = {}): Pair<Throwable?, Report?> =
+    suspend fun validate(
+        luaCode: String,
+        testQuery: String,
+        onStep: (String) -> Unit = {},
+        probeBookUrl: String? = null
+    ): Pair<Throwable?, Report?> =
         withContext(Dispatchers.IO) {
             val tmpDir: Path = Files.createTempDirectory("pds-validate")
             try {
@@ -50,6 +55,8 @@ class PluginValidator(
                 val adapter = report.loaded.firstOrNull()
                     ?: return@withContext RuntimeException("Plugin loaded but no adapter produced") to null
 
+                // Prefer the analysis-verified sample novel URL over whatever
+                // the generated catalog happens to return first.
                 val entries = mutableListOf<ValidationEntry>()
                 var firstBookUrl: String? = null
                 var firstChapterUrl: String? = null
@@ -61,11 +68,21 @@ class PluginValidator(
                     }
                     onStep("Validating $name …")
                     val t0 = System.currentTimeMillis()
-                    val (ok, detail) = try {
-                        withTimeout(12_000) { block() }
+                    val attempt: suspend () -> Pair<Boolean, String> = try {
+                        { withTimeout(12_000) { block() } }
                     } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                        false to "timed out after 12s"
-                    } catch (e: Exception) { false to (e.message ?: e.toString()) }
+                        { false to "timed out after 12s" }
+                    } catch (_: Exception) { block }
+
+                    // Sites behind CDNs sometimes serve degraded variants to
+                    // non-browser clients; one retry takes the better answer.
+                    val first = try { attempt() } catch (e: Exception) { false to (e.message ?: e.toString()) }
+                    val result = if (first.first) first else {
+                        kotlinx.coroutines.delay(600)
+                        try { attempt().let { r -> if (r.first || r.second.length >= first.second.length) r else first } }
+                        catch (e: Exception) { first }
+                    }
+                    val (ok, detail) = result
                     synchronized(entries) {
                         entries.add(ValidationEntry(name, ok, detail, System.currentTimeMillis() - t0))
                     }
@@ -85,6 +102,12 @@ class PluginValidator(
                     }
                 }
                 if (!firstBookUrl.isNullOrBlank()) {
+                    // If the first catalog item looks like a category/nav page,
+                    // fall back to the analysis-verified sample novel URL.
+                    if (probeBookUrl != null && !looksLikeNovelPage(firstBookUrl!!)) {
+                        onStep("Catalog item #1 does not look like a novel page — using verified probe URL instead")
+                        firstBookUrl = probeBookUrl
+                    }
                     // Book-page functions share the plugin's internal page cache,
                     // so they are cheap once the first one warms it. Chapter-text
                     // and search hit different URLs → run them concurrently.
@@ -166,4 +189,14 @@ class PluginValidator(
                 tmpDir.toFile().deleteRecursively()
             }
         }
+
+    private fun looksLikeNovelPage(url: String): Boolean {
+        val path = try { java.net.URI(url).path ?: "" } catch (_: Exception) { url }
+        if (path.isBlank() || path == "/") return false
+        val bad = Regex(
+            "/(genre|categor|tag|rank|popular|latest|search|library|home|sort|author|community|forum|user|account)",
+            RegexOption.IGNORE_CASE
+        )
+        return !bad.containsMatchIn(path)
+    }
 }
