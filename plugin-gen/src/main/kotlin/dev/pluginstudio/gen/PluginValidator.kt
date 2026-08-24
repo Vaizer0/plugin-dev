@@ -179,7 +179,16 @@ class PluginValidator(
                     }
                 }
 
-                val coreOk = entries.firstOrNull { it.function == "getCatalogList" }?.ok == true &&
+                // metadata contract: id/name/baseUrl must be present on the adapter
+                val metaOk = adapter.id.isNotBlank() && adapter.id != "generated_source" &&
+                    adapter.name.isNotBlank() && adapter.name != "Unknown" &&
+                    adapter.baseUrl.isNotBlank()
+                entries.add(ValidationEntry("metadata", metaOk,
+                    if (metaOk) "id=${adapter.id} · baseUrl=${adapter.baseUrl}" else "missing id/name/baseUrl",
+                    0))
+
+                val coreOk = metaOk &&
+                    entries.firstOrNull { it.function == "getCatalogList" }?.ok == true &&
                     (entries.firstOrNull { it.function == "getChapterList" }?.ok == true ||
                         entries.firstOrNull { it.function == "parsePage" }?.ok == true) &&
                     entries.firstOrNull { it.function == "getChapterText" }?.ok == true

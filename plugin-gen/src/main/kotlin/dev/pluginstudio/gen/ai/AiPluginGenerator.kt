@@ -42,6 +42,13 @@ STRICT RULES:
      getChapterList(bookUrl) OR parsePage(bookUrl, page)
      getChapterText(html, url)
    Every helper you call must be defined in the same file.
+4b. METADATA CONTRACT — ALWAYS emit these top-level variables (no local):
+     id       = "lowercase_with_underscores"
+     name     = "Human Name"
+     version  = "1.0.0"
+     baseUrl  = "<evidence.baseUrl>"
+     language = "<ISO code>"
+   plus icon per rule 5.
 4. Cover every capability the evidence supports: metadata, catalog, search,
    details, genres, chapter list (or parsePage), chapter content, pagination, images.
 5. ICON: always set the top-level `icon` variable — use evidence.siteIconObserved
@@ -74,6 +81,34 @@ STRICT RULES:
                 if (used && !defined) out = shim + "\n\n" + out
             }
             return out
+        }
+
+        /**
+         * Guarantees the five required top-level metadata variables exist.
+         * Missing ones are injected at the very top; existing ones untouched.
+         */
+        fun ensureMetadata(
+            lua: String,
+            baseUrl: String,
+            fallbackId: String,
+            fallbackName: String,
+            language: String = "en",
+            iconSuggestion: String
+        ): String {
+            val defs = mutableListOf<String>()
+            fun missing(key: String) =
+                !Regex("(?m)^\\s*(?:local\\s+)?$key\\s*=\\s*\"[^\"]*\"").containsMatchIn(lua)
+            fun esc(v: String) = v.replace("\\", "\\\\").replace("\"", "\\\"")
+            if (missing("id")) defs.add("id       = \"${esc(fallbackId)}\"")
+            if (missing("name")) defs.add("name     = \"${esc(fallbackName)}\"")
+            if (missing("version")) defs.add("version  = \"1.0.0\"")
+            if (missing("baseUrl")) defs.add("baseUrl  = \"${esc(baseUrl)}\"")
+            if (missing("language")) defs.add("language = \"${esc(language)}\"")
+            if (iconSuggestion.isNotBlank() &&
+                !lua.contains("gstatic.com/faviconV2") &&
+                !Regex("(?m)^\\s*icon\\s*=").containsMatchIn(lua))
+                defs.add("icon     = \"${esc(iconSuggestion)}\"")
+            return if (defs.isEmpty()) lua else (defs.joinToString("\n") + "\n\n" + lua)
         }
 
         fun extractLua(reply: String): String? {

@@ -184,7 +184,6 @@ class AiClient(private val fetcher: HttpFetcher = HttpFetcher()) {
                     .build()
                     .newCall(b.build())
                 call.timeout().deadline(timeoutSec + 5L, java.util.concurrent.TimeUnit.SECONDS)
-                call.timeout().deadline(timeoutSec + 3L, java.util.concurrent.TimeUnit.SECONDS)
                 call.execute().use { resp ->
                     HttpFetcher.Response(resp.code, resp.header("Content-Type") ?: "", resp.body?.string() ?: "")
                 }

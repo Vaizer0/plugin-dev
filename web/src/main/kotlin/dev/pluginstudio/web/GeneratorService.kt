@@ -26,7 +26,8 @@ data class AttemptInfo(
     val luaBytes: Int
 )
 
-class GenJob(val id: String, val url: String, val query: String) {
+class GenJob(val id: String, val url: String, val query: String,
+             val idHint: String? = null, val nameHint: String? = null) {
     @Volatile var phase: String = "queued"
     val steps: MutableList<Step> = java.util.Collections.synchronizedList(mutableListOf<Step>())
     @Volatile var result: GenerationResult? = null
@@ -99,7 +100,7 @@ class GeneratorService(
     @Synchronized
     fun startJob(p: StartParams): GenJob {
         jobCounter++
-        val job = GenJob("gen-$jobCounter-${System.currentTimeMillis()}", p.url, p.query)
+        val job = GenJob("gen-$jobCounter-${System.currentTimeMillis()}", p.url, p.query, p.idHint, p.nameHint)
         jobs[job.id] = job
         scope.launch {
             try { runPipeline(job, p) }
@@ -209,7 +210,8 @@ class GeneratorService(
                 job.step("✗ ${outcome.first.message.take(160)}")
                 continue
             }
-            val lua = dev.pluginstudio.gen.ai.AiPluginGenerator.withHelperShims(outcome.second)
+            var lua = dev.pluginstudio.gen.ai.AiPluginGenerator.withHelperShims(outcome.second)
+            lua = ensureMetadata(job, lua)
 
             job.phase = "ai-validate"
             job.step("Validating AI Lua against the live site (${lua.length} bytes) …")
@@ -345,7 +347,7 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
             is AiClient.Result.Ok -> {
                 val replyText = outcome.text
                 val lua = AiPluginGenerator.extractLua(replyText)?.let {
-                    dev.pluginstudio.gen.ai.AiPluginGenerator.withHelperShims(it)
+                    ensureMetadata(job, AiPluginGenerator.withHelperShims(it))
                 }
                 var rebuilt = false
                 var pass: Boolean? = null
@@ -459,6 +461,20 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
     } catch (_: Exception) { null }
 
     private fun attemptCount(job: GenJob): Int = synchronized(job.attempts) { job.attempts.size }
+
+    /** Deterministic guarantee: the five required top-level metadata vars exist. */
+    private fun ensureMetadata(job: GenJob, lua: String): String {
+        val baseUrl = job.corpusRef?.baseUrl ?: job.url
+        val host = try { java.net.URI(baseUrl).host ?: "" } catch (_: Exception) { "" }
+        val fallbackId = (job.idHint ?: host.substringBefore('.')
+            .replace(Regex("[^a-zA-Z0-9]+"), "_")).trim('_').lowercase().ifBlank { "generated_source" }
+        val fallbackName = job.nameHint ?: host.substringBefore('.')
+            .replaceFirstChar { it.uppercase() }
+        val icon = "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://$host&size=256"
+        return dev.pluginstudio.gen.ai.AiPluginGenerator.ensureMetadata(
+            lua, baseUrl, fallbackId, fallbackName, language = "en", iconSuggestion = icon
+        )
+    }
 
     /** Analyze an extra page mid-session and fold it into the stored evidence. */
     suspend fun analyzeExtraPage(jobId: String, url: String): Map<String, Any?> {
