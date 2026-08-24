@@ -21,24 +21,65 @@ class AiPluginGenerator(private val client: AiClient = AiClient()) {
     companion object {
         fun systemPrompt(): String = """You are an expert generator of NoveLA Lua source plugins for novel websites.
 
-The user gives you STRUCTURED EVIDENCE collected by a deterministic analyzer from a real site (pages, roles, containers, selector candidates, verified API endpoints, forms, pagination). The evidence is the ONLY source of truth.
+You are given:
+(1) STRUCTURED EVIDENCE — collected live by a deterministic analyzer from the target site,
+(2) THE OFFICIAL NOVELA LUA PLUGIN GUIDE — the authoritative spec for structure,
+    metadata, function signatures, engine builtins and conventions.
 
 STRICT RULES:
-1. NEVER invent URLs, endpoints, selectors, JSON fields, parameters, headers or cookies. Use only what appears in the evidence.
-2. Prefer VERIFIED JSON APIs (listed under verifiedApis) over HTML scraping whenever they cover a capability.
-3. Use only the engine builtins documented below — do not invent functions.
-4. Generate metadata + getCatalogList + getCatalogSearch (when search evidence exists) + book details + chapter list (or parsePage) + getChapterText, covering every capability the evidence supports.
-5. ICON: always set the top-level `icon` variable. Use evidence.siteIconObserved if present; otherwise use evidence.iconSuggestion verbatim (standard Novela favicon template on the base domain — never include a path).
-6. Keep code COMPACT: short section comments only — less output = faster & fewer token overruns. and normalize whitespace.
-7. Output EXACTLY ONE complete Lua source in a single ```lua code block, no explanations before/after.
+1. The EVIDENCE is your only source of truth for URLs, selectors, JSON fields,
+   endpoints and parameters. NEVER invent anything not present there.
+2. Prefer VERIFIED JSON APIs (verifiedApis in the evidence) over HTML scraping
+   whenever they cover a capability.
+3. Follow the GUIDE for format and API usage — otherwise you have FREE HAND in
+   designing helpers, control flow and parsing strategy, as long as the plugin
+   loads through the real engine and works.
+   HARD CONTRACT — exact global function NAMES/arity; include one only if the
+   capability is supported by evidence:
+     getCatalogList(index) · getCatalogSearch(index, query)
+     getBookTitle(bookUrl) · getBookCoverImageUrl(bookUrl)
+     getBookDescription(bookUrl) · getBookGenres(bookUrl)
+     getChapterList(bookUrl) OR parsePage(bookUrl, page)
+     getChapterText(html, url)
+   Every helper you call must be defined in the same file.
+4. Cover every capability the evidence supports: metadata, catalog, search,
+   details, genres, chapter list (or parsePage), chapter content, pagination, images.
+5. ICON: always set the top-level `icon` variable — use evidence.siteIconObserved
+   if present, otherwise evidence.iconSuggestion verbatim (standard Novela favicon
+   template on the base domain).
+6. Keep code compact; short section comments only.
+7. Output EXACTLY ONE complete Lua source in a single ```lua code block — nothing
+   before or after.
 
 """ + LuaApiReference.text()
+
+        private val HELPER_SHIMS = mapOf(
+            "absUrl" to """
+                |if not absUrl then
+                |  function absUrl(href)
+                |    if not href or href == "" then return "" end
+                |    if string_starts_with(href, "http") then return href end
+                |    if string_starts_with(href, "//") then return "https:" .. href end
+                |    return url_resolve(baseUrl, href)
+                |  end
+                |end""".trimMargin()
+        )
+
+        /** Inject commonly-implied helper definitions when the model referenced but forgot them. */
+        fun withHelperShims(lua: String): String {
+            var out = lua
+            for ((name, shim) in HELPER_SHIMS) {
+                val defined = Regex("(local\\s+)?function\\s+$name\\b").containsMatchIn(out)
+                val used = Regex("$name\\s*\\(").containsMatchIn(out)
+                if (used && !defined) out = shim + "\n\n" + out
+            }
+            return out
+        }
 
         fun extractLua(reply: String): String? {
             val fenced = Regex("```(?:lua)?\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
                 .findAll(reply).lastOrNull()?.groupValues?.get(1)?.trim()
             if (!fenced.isNullOrBlank() && fenced.contains("function")) return fenced
-            // unfenced fallback: take from first assignment/function to end
             val start = reply.lines().indexOfFirst {
                 it.trimStart().startsWith("id ") || it.trimStart().startsWith("local") ||
                     it.trimStart().startsWith("function")

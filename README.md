@@ -209,6 +209,7 @@ plugin-dev-studio/
 | AI error 429 FreeUsageLimitError | Keyless quota exhausted for that model; wait, switch model in Settings, or add a key. |
 | "chapter list rendered client-side" | SPA site: server HTML has no chapters → use capture flow. |
 | Generation slow (>2 min) | Free reasoning models can be slow; pick a faster model in Settings. |
+| Generated plugin calls undefined helper / wrong function names | AI gets an explicit function-name contract + automatic helper shims (`absUrl` etc.), and every attempt is live-validated — check the matrix and use 💬 chat to correct. |
 | Chat says "chapter list wrong" fixed but still 0 | Make sure you analyzed the right book page — use ➕ Analyze extra page in the chat panel. |
 
 ## Roadmap

@@ -25,9 +25,9 @@ object LuaApiReference {
                 if (Files.exists(f)) {
                     val guide = Files.readString(f)
                     if (guide.length > 1000) {
+                        // Free hand: the guide alone is the authoritative spec.
                         cached = "# OFFICIAL NOVELA LUA PLUGIN GUIDE (authoritative — follow it exactly)\n\n" +
-                            selectSections(guide) +
-                            "\n\n== QUICK ENGINE REFERENCE (return shapes) ==\n" + TEXT
+                            selectSections(guide)
                         return cached!!
                     }
                 }
@@ -43,7 +43,7 @@ object LuaApiReference {
      * sections fill whatever budget remains.
      */
     private fun selectSections(guide: String): String {
-        val budget = 34_000
+        val budget = 24_000   // keep prompts lean: speed on keyless reasoning models
         val parts = guide.split(Regex("(?m)^## ")).toMutableList()
         if (parts.size <= 2) return guide.take(budget)
         val preamble = parts.removeAt(0)
@@ -53,11 +53,11 @@ object LuaApiReference {
 
         // Highest priority first — these are what generated plugins get wrong.
         val priority = listOf(
-            "Chapter List", "Paginated Chapter List", "Chapter Text",
-            "Required Functions", "Working with HTTP", "Page Caching",
-            "Working with HTML and CSS Selectors", "Catalog and Pagination",
-            "Working with the JSON API", "Text Cleanup", "Metadata",
-            "Full API Reference", "Common Mistakes", "Full Plugin Template"
+            "Required Functions", "Chapter List", "Paginated Chapter List", "Chapter Text",
+            "Working with HTTP", "Page Caching",
+            "Catalog and Pagination",
+            "Working with the JSON API", "Text Cleanup",
+            "Full API Reference", "Common Mistakes"
         )
         val chosen = LinkedHashSet<Sec>()
         var used = preamble.length.coerceAtMost(1200)

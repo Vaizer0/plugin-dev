@@ -182,13 +182,13 @@ class GeneratorService(
 
         while (attemptNo < 3) {
             // Overall wall-clock guard for the whole AI phase (~4 min).
-            if ((System.nanoTime() - aiBudgetStart) / 1_000_000_000 > 240) {
+            if ((System.nanoTime() - aiBudgetStart) / 1_000_000_000 > 280) {
                 finishError(job, "AI phase exceeded its 4-minute budget — try a faster model/provider or the capture flow.")
                 return
             }
             attemptNo++
             job.phase = "ai-generate"
-            val perCallTimeout = if (consecutiveTimeouts >= 1) 100_000L else 170_000L
+            val perCallTimeout = if (consecutiveTimeouts >= 1) 110_000L else 195_000L
             job.step("AI attempt $attemptNo/3 via $model (${perCallTimeout/1000}s budget) …")
             val outcome = withTimeoutOrNull(perCallTimeout) {
                 aiGen.generate(provider, model, AiPluginGenerator.GenerationCall(evidenceJson, prevLua, prevFailures))
@@ -209,7 +209,7 @@ class GeneratorService(
                 job.step("✗ ${outcome.first.message.take(160)}")
                 continue
             }
-            val lua = outcome.second
+            val lua = dev.pluginstudio.gen.ai.AiPluginGenerator.withHelperShims(outcome.second)
 
             job.phase = "ai-validate"
             job.step("Validating AI Lua against the live site (${lua.length} bytes) …")
@@ -344,7 +344,9 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
             }
             is AiClient.Result.Ok -> {
                 val replyText = outcome.text
-                val lua = AiPluginGenerator.extractLua(replyText)
+                val lua = AiPluginGenerator.extractLua(replyText)?.let {
+                    dev.pluginstudio.gen.ai.AiPluginGenerator.withHelperShims(it)
+                }
                 var rebuilt = false
                 var pass: Boolean? = null
                 var validation: List<Map<String, Any?>>? = null
