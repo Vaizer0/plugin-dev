@@ -60,3 +60,6 @@ package.json
 .plugindev.pid
 plugindev.log
 .pds-ai.json
+
+# local AI/runtime artifacts
+generated/

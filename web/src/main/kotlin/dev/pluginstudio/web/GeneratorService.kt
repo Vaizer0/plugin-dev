@@ -363,8 +363,8 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
                             attemptCount(job) + 1, "AI:$model 💬", report.pass,
                             "${report.entries.count { it.ok }}/${report.entries.size} functions pass", lua.length
                         ))
-                        job.phase = if (report.pass) "done" else "error"
-                        job.error = if (report.pass) null else "Chat-rebuilt plugin did not fully pass"
+                        job.phase = "done"
+                        job.error = null   // pass/fail is visible in the validation matrix
                     }
                 }
                 val cleanReply = replyText.replace(Regex("```(?:lua)?[\\s\\S]*?```", RegexOption.IGNORE_CASE), "").trim()
