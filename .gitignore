@@ -57,3 +57,5 @@ repomix.config.json
 /node_modules
 package-lock.json
 package.json
+.plugindev.pid
+plugindev.log
