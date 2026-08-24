@@ -25,10 +25,8 @@ object LuaApiReference {
                 if (Files.exists(f)) {
                     val guide = Files.readString(f)
                     if (guide.length > 1000) {
-                        val trimmed = if (guide.length > 18_000)
-                            guide.take(11_000) + "\n\n[... middle sections omitted ...]\n\n" + guide.takeLast(6_000)
-                        else guide
-                        cached = "# OFFICIAL NOVELA LUA PLUGIN GUIDE (authoritative — follow it exactly)\n\n$trimmed" +
+                        cached = "# OFFICIAL NOVELA LUA PLUGIN GUIDE (authoritative — follow it exactly)\n\n" +
+                            selectSections(guide) +
                             "\n\n== QUICK ENGINE REFERENCE (return shapes) ==\n" + TEXT
                         return cached!!
                     }
@@ -37,6 +35,40 @@ object LuaApiReference {
         }
         cached = TEXT
         return cached!!
+    }
+
+    /**
+     * Section-aware selection: never blind-truncate. Priority sections
+     * (chapter list/text, functions, HTTP…) are always kept; lower-value
+     * sections fill whatever budget remains.
+     */
+    private fun selectSections(guide: String): String {
+        val budget = 34_000
+        val parts = guide.split(Regex("(?m)^## ")).toMutableList()
+        if (parts.size <= 2) return guide.take(budget)
+        val preamble = parts.removeAt(0)
+
+        data class Sec(val title: String, val body: String)
+        val secs = parts.map { Sec(it.substringBefore('\n'), "## $it") }
+
+        // Highest priority first — these are what generated plugins get wrong.
+        val priority = listOf(
+            "Chapter List", "Paginated Chapter List", "Chapter Text",
+            "Required Functions", "Working with HTTP", "Page Caching",
+            "Working with HTML and CSS Selectors", "Catalog and Pagination",
+            "Working with the JSON API", "Text Cleanup", "Metadata",
+            "Full API Reference", "Common Mistakes", "Full Plugin Template"
+        )
+        val chosen = LinkedHashSet<Sec>()
+        var used = preamble.length.coerceAtMost(1200)
+        fun add(s: Sec) { if (used + s.body.length <= budget && s !in chosen) { chosen.add(s); used += s.body.length } }
+        for (key in priority) secs.filter { it.title.startsWith(key) }.forEach { add(it) }
+        for (s in secs) if (s !in chosen) add(s)   // fill remaining budget
+
+        // Emit in original document order.
+        val out = StringBuilder(preamble.take(1200))
+        for (s in secs) if (s in chosen) out.append("\n\n## ").append(s.body)
+        return out.toString()
     }
 
     const val TEXT = """

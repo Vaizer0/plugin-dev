@@ -64,7 +64,20 @@ class AiClient(private val fetcher: HttpFetcher = HttpFetcher()) {
         userPrompt: String,
         maxTokens: Int = 12_000,
         temperature: Double = 0.2
-    ): Result = completeWithKeys(provider, apiKeys(provider), model, systemPrompt, userPrompt, maxTokens, temperature)
+    ): Result = completeTurns(
+        provider, model, systemPrompt,
+        listOf("user" to userPrompt), maxTokens, temperature
+    )
+
+    /** Multi-turn completion (interactive repair chat). */
+    suspend fun completeTurns(
+        provider: ProviderConfig,
+        model: String,
+        systemPrompt: String,
+        turns: List<Pair<String, String>>,
+        maxTokens: Int = 12_000,
+        temperature: Double = 0.2
+    ): Result = completeWithKeys(provider, apiKeys(provider), model, systemPrompt, turns, maxTokens, temperature)
 
     /** NoveLA-style multi-key round-robin: 401 tries remaining keys, 429 rotates too. */
     private suspend fun completeWithKeys(
@@ -72,14 +85,14 @@ class AiClient(private val fetcher: HttpFetcher = HttpFetcher()) {
         keys: List<String>,
         model: String,
         systemPrompt: String,
-        userPrompt: String,
+        turns: List<Pair<String, String>>,
         maxTokens: Int,
         temperature: Double
     ): Result {
         var last: Result? = null
         for ((i, _) in keys.withIndex()) {
             val key = keys[(keyCursor(provider.id) + i) % keys.size]
-            val r = completeOnce(provider, key, model, systemPrompt, userPrompt, maxTokens, temperature)
+            val r = completeOnce(provider, key, model, systemPrompt, turns, maxTokens, temperature)
             when (r) {
                 is Result.Ok -> { advanceCursor(provider.id); return r }
                 is Result.Fail -> {
@@ -108,7 +121,7 @@ class AiClient(private val fetcher: HttpFetcher = HttpFetcher()) {
         apiKey: String,
         model: String,
         systemPrompt: String,
-        userPrompt: String,
+        turns: List<Pair<String, String>>,
         maxTokens: Int,
         temperature: Double
     ): Result {
@@ -117,22 +130,18 @@ class AiClient(private val fetcher: HttpFetcher = HttpFetcher()) {
             "responses" -> provider.baseUrl.trimEnd('/') + "/responses"
             else -> provider.baseUrl.trimEnd('/') + "/chat/completions"
         }
+        val messages = listOf(mapOf("role" to "system", "content" to systemPrompt)) +
+            turns.map { mapOf("role" to it.first, "content" to it.second) }
         val payload: Map<String, Any> = when (provider.mode) {
             "responses" -> mapOf(
                 "model" to model,
-                "input" to listOf(
-                    mapOf("role" to "system", "content" to systemPrompt),
-                    mapOf("role" to "user", "content" to userPrompt)
-                ),
+                "input" to messages,
                 "max_output_tokens" to maxTokens,
                 "temperature" to temperature
             )
             else -> mapOf(
                 "model" to model,
-                "messages" to listOf(
-                    mapOf("role" to "system", "content" to systemPrompt),
-                    mapOf("role" to "user", "content" to userPrompt)
-                ),
+                "messages" to messages,
                 "max_tokens" to maxTokens,
                 "temperature" to temperature
             )

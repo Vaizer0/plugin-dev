@@ -636,6 +636,31 @@ class WebStudio(
                 ))
             }
 
+            // ── interactive AI repair chat ──
+
+            post("/api/generator/chat") {
+                val body = parseBody(call.receiveText())
+                val jobId = body["jobId"]?.toString()?.trim().orEmpty()
+                val message = body["message"]?.toString()?.trim().orEmpty()
+                if (jobId.isBlank() || message.isBlank()) {
+                    call.respondJson(mapOf("error" to "Missing 'jobId' or 'message'"), HttpStatusCode.BadRequest)
+                    return@post
+                }
+                val model = body["model"]?.toString()?.trim()?.ifBlank { null }
+                call.respondJson(generator.chat(jobId, message, model))
+            }
+
+            post("/api/generator/analyze-page") {
+                val body = parseBody(call.receiveText())
+                val jobId = body["jobId"]?.toString()?.trim().orEmpty()
+                val url = body["url"]?.toString()?.trim().orEmpty()
+                if (jobId.isBlank() || url.isBlank()) {
+                    call.respondJson(mapOf("error" to "Missing 'jobId' or 'url'"), HttpStatusCode.BadRequest)
+                    return@post
+                }
+                call.respondJson(generator.analyzeExtraPage(jobId, url))
+            }
+
             // ── AI providers ──
 
             get("/api/ai/providers") {

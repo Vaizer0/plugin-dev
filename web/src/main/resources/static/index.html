@@ -879,6 +879,53 @@ async function mountPatterns(host, p) {
   } catch (e) { host.innerHTML = `<div class="err-text">${esc(e.message)}</div>`; }
 }
 
+/* ── AI repair chat ── */
+function renderChatHistory() {
+  const host = $('#chatHistory'); if (!host) return;
+  host.innerHTML = (window.__chat || []).map(m => `
+    <div style="margin:6px 0;text-align:${m.role==='user'?'right':'left'}">
+      <span class="pill">${m.role==='user'?'You':'AI'}</span>
+      <div class="${m.role==='user'?'':'muted'}" style="font-size:12px;white-space:pre-wrap;margin-top:2px">${esc(m.text)}</div>
+    </div>`).join('') || '<div class="muted" style="font-size:12px">Tell the AI what to fix. It sees the full evidence + current Lua + validation results.</div>';
+  host.scrollTop = host.scrollHeight;
+}
+async function sendChat() {
+  const inp = $('#chatInput');
+  const msg = inp.value.trim();
+  if (!msg || !currentJobId) return;
+  inp.value = '';
+  window.__chat = window.__chat || [];
+  window.__chat.push({role:'user', text: msg});
+  renderChatHistory();
+  const btn = $('#chatSend'); btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await postJson('/api/generator/chat', {jobId: currentJobId, message: msg});
+    if (r.rebuilt) {
+      window.__chat.push({role:'assistant', text: '✓ Rebuilt & re-validated: ' + (r.pass ? 'ALL PASS ✓' : 'still failing (see matrix)')});
+      window.__lastLua = undefined; // force refresh via result reload below
+      // pull updated result into the UI
+      const st = await api('/api/generator/status/' + currentJobId);
+      if (st.phase === 'done' && st.result) { renderGenResult(currentJobId, st.result, st.attempts||[]); }
+    } else {
+      window.__chat.push({role:'assistant', text: r.reply});
+    }
+  } catch(e) {
+    window.__chat.push({role:'assistant', text: 'Error: ' + e.message});
+  }
+  btn.disabled = false; btn.textContent = 'Send';
+  renderChatHistory();
+}
+async function addExtraPage() {
+  const url = $('#extraUrl').value.trim();
+  if (!url || !currentJobId) return;
+  $('#extraStatus').innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await postJson('/api/generator/analyze-page', {jobId: currentJobId, url});
+    $('#extraStatus').textContent = r.ok ? `✓ ${r.kind} page added (${r.bytes}b)` : '✗ ' + (r.error||'failed');
+    if (!r.ok) $('#extraStatus').style.color = 'var(--err)';
+  } catch(e) { $('#extraStatus').textContent = '✗ '+e.message; }
+}
+
 /* AI providers */
 let aiProviders = [], aiDefaultProvider = null;
 async function loadProviders() {
@@ -1055,6 +1102,22 @@ function mountNewPlugin(c) {
 
     <div id="npResult"></div>
 
+    <div id="chatPanel" class="hidden" style="margin-top:20px">
+      <h2 class="sec">💬 Chat with AI — fix / improve this plugin</h2>
+      <div id="chatHistory" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--panel)"></div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="chatInput" placeholder='e.g. "chapter list is wrong — use the container from chapterLinkGroups"' style="flex:1"
+               onkeydown="if(event.key==='Enter'){sendChat();}">
+        <button class="btn filled" id="chatSend" onclick="sendChat()">Send</button>
+      </div>
+      <details style="margin-top:8px"><summary class="muted" style="font-size:12px">➕ Analyze an extra page into evidence (URL)</summary>
+        <div class="row" style="margin-top:6px">
+          <input type="text" id="extraUrl" placeholder="https://site.com/some-book-or-chapter-page" style="flex:1">
+          <button class="btn" onclick="addExtraPage()">Analyze page</button><span id="extraStatus" class="muted" style="font-size:11px"></span>
+        </div>
+      </details>
+    </div>
+
     <details id="npProtectedBox" style="margin-top:18px">
       <summary>🔒 Protected site (Cloudflare)? Capture it from your own browser →</summary>
       <div class="card" style="margin-top:8px">
@@ -1160,6 +1223,8 @@ async function startGenerate() {
         clearInterval(npPollTimer); npPollTimer = null;
         $('#npBtn').disabled = false;
         st.phase === 'done' ? renderGenResult(jobId, st.result, st.attempts||[]) : renderGenFailure(st);
+        const cp = document.getElementById('chatPanel');
+        if (cp) { cp.classList.remove('hidden'); currentJobId = jobId; renderChatHistory(); }
       }
     } catch (e) {}
   }, 1200);

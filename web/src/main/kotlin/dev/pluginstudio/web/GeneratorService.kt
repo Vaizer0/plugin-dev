@@ -20,14 +20,14 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class AttemptInfo(
     val n: Int,
-    val source: String,          // "AI:<model>"
+    val source: String,
     val ok: Boolean,
     val summary: String,
     val luaBytes: Int
 )
 
 class GenJob(val id: String, val url: String, val query: String) {
-    @Volatile var phase: String = "queued"   // crawl|probe|evidence|ai-generate|ai-validate|done|error
+    @Volatile var phase: String = "queued"
     val steps: MutableList<Step> = java.util.Collections.synchronizedList(mutableListOf<Step>())
     @Volatile var result: GenerationResult? = null
     @Volatile var error: String? = null
@@ -35,6 +35,12 @@ class GenJob(val id: String, val url: String, val query: String) {
     val startedAt = System.currentTimeMillis()
     val attempts = java.util.Collections.synchronizedList(mutableListOf<AttemptInfo>())
     @Volatile var aiModel: String = ""
+
+    // Transient AI-session state for the interactive repair chat
+    @Volatile var corpusRef: SiteCrawler.CrawlResult? = null
+    @Volatile var evidenceJson: String = ""
+    @Volatile var providerIdUsed: String = ""
+    val chatHistory = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
     fun elapsedMs(): Long = (System.nanoTime() - startNanos) / 1_000_000
 
@@ -54,9 +60,9 @@ data class StartParams(
 )
 
 /**
- * Pipeline: Plugin-Dev deterministic analysis (multi-page crawl + live API
- * probing) → structured evidence → AI Lua generation (grounded in the official
- * plugin guide) → real-engine live validation → AI repair loop (max 3).
+ * Pipeline: deterministic analysis (multi-page crawl + live API probing) →
+ * structured evidence → AI Lua generation → real-engine validation → AI repair
+ * loop (≤3) → interactive user chat for further fixes.
  */
 class GeneratorService(
     private val repoRoot: Path,
@@ -67,7 +73,7 @@ class GeneratorService(
     val jobs = ConcurrentHashMap<String, GenJob>()
     private var jobCounter = 0
 
-    // ── browser capture session (protected sites) ──
+    // ── browser capture session ──
 
     data class CapturedPage(val url: String, val html: String, val requests: List<NetRecord>, val receivedAt: Long)
 
@@ -104,7 +110,7 @@ class GeneratorService(
     }
 
     private suspend fun runPipeline(job: GenJob, p: StartParams) {
-        // ── 0. provider/model (harness-style: config decides, no magic) ──
+        // ── 0. provider/model ──
         val provider = aiSettings.get(p.providerId ?: "") ?: aiSettings.default()
         if (provider == null) {
             finishError(job, "No AI provider configured — open ⚙ AI Settings and add one.")
@@ -131,11 +137,7 @@ class GeneratorService(
                 job.step("Using ${captureInput.size} browser-captured page(s)")
                 crawler.corpusFromCapture(captureInput)
             } else crawler.crawl(p.url, p.query) { msg ->
-                when {
-                    msg.startsWith("Probing") || msg.startsWith("Testing") -> job.phase = "probe"
-                    msg.startsWith("Inferred") || msg.startsWith("Book page") ||
-                        msg.startsWith("Chapter") || msg.startsWith("Search results") -> job.phase = "probe"
-                }
+                if (msg.startsWith("Probing") || msg.startsWith("Testing")) job.phase = "probe"
                 job.step(msg)
             }
         } ?: run { finishError(job, "Analysis exceeded its 60s budget — site too slow; try the capture flow"); return }
@@ -146,7 +148,7 @@ class GeneratorService(
             return
         }
 
-        // ── 2. analysis: parallel live API probing ──
+        // ── 2. parallel live API probing ──
         job.phase = "probe"
         val prober = ApiProber()
         val candidates = prober.candidatesFromPages(corpus.pages)
@@ -161,6 +163,11 @@ class GeneratorService(
         job.phase = "evidence"
         val evidenceJson = EvidenceBuilder.toJson(EvidenceBuilder.build(corpus, apis, p.query))
         job.step("Evidence package ready (${evidenceJson.length} bytes, ${corpus.pages.size} pages)")
+
+        // keep session state for the interactive chat window
+        job.corpusRef = corpus
+        job.evidenceJson = evidenceJson
+        job.providerIdUsed = provider.id
 
         // ── 4. AI generate → validate → repair (≤3) ──
         val aiGen = AiPluginGenerator(AiClient())
@@ -177,15 +184,18 @@ class GeneratorService(
             job.step("AI attempt $attemptNo/3 via $model …")
             val outcome = withTimeoutOrNull(180_000) {
                 aiGen.generate(provider, model, AiPluginGenerator.GenerationCall(evidenceJson, prevLua, prevFailures))
-            } ?: (AiPluginGenerator.Result2(false, "AI call timed out after 180s") to "")
-            val genOk = outcome.first.ok
-            val lua = outcome.second
-            if (!genOk) {
-                job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, outcome.first.message, lua.length))
-                job.step("✗ ${outcome.first.message.take(160)}")
-                // No silent rotation — errors surface so the user can fix config.
+            }
+            if (outcome == null) {
+                job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, "AI call timed out after 180s", 0))
+                job.step("✗ AI call timed out after 180s")
                 continue
             }
+            if (!outcome.first.ok) {
+                job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, outcome.first.message, 0))
+                job.step("✗ ${outcome.first.message.take(160)}")
+                continue
+            }
+            val lua = outcome.second
 
             job.phase = "ai-validate"
             job.step("Validating AI Lua against the live site (${lua.length} bytes) …")
@@ -226,7 +236,14 @@ class GeneratorService(
             job.step("✗ attempt $attemptNo incomplete — sending failures back for repair")
         }
 
-        finishWithBest(job, best)
+        if (best != null) {
+            job.result = best
+            job.phase = "done"
+            job.error = null
+            job.step("Stopped after repair loop — best attempt kept (see validation matrix / chat to fix further).")
+        } else {
+            finishError(job, "AI could not produce a usable plugin from the available evidence.")
+        }
     }
 
     private fun finishError(job: GenJob, msg: String) {
@@ -235,19 +252,228 @@ class GeneratorService(
         job.step("✗ $msg")
     }
 
-    private fun finishWithBest(job: GenJob, best: GenerationResult?) {
-        if (best != null) {
-            job.result = best
-            job.phase = "done"   // partial success surfaces via overallPass=false in UI
-            job.error = null
-            job.step("Stopped after repair loop — best attempt kept (see validation matrix).")
+    // ── interactive AI repair chat ──
+
+    data class ChatReply(
+        val reply: String,
+        val rebuilt: Boolean,
+        val pass: Boolean?,
+        val validation: List<Map<String, Any?>>?
+    )
+
+    /**
+     * User sends feedback/questions about the current plugin. Model sees
+     * evidence + current Lua + validation results + conversation history.
+     * If the reply contains Lua it is re-validated live and becomes the new plugin.
+     */
+    suspend fun chat(jobId: String, userMessage: String, requestedModel: String?): ChatReply {
+        val job = jobs[jobId] ?: return ChatReply("Unknown job.", false, null, null)
+        val provider = aiSettings.get(job.providerIdUsed.ifBlank { aiSettings.defaultProviderId })
+            ?: aiSettings.default()
+            ?: return ChatReply("No AI provider configured.", false, null, null)
+        val model = (requestedModel?.takeIf { it.isNotBlank() } ?: provider.defaultModel)
+            .ifBlank { job.aiModel.substringAfter('/').takeIf { it.isNotBlank() } }
+            ?: return ChatReply("No model configured for this session.", false, null, null)
+
+        val result = job.result
+        val fails = (result?.validation ?: emptyList()).filter { !it.ok }.map { "${it.function}: ${it.detail}" }
+
+        val turns = mutableListOf<Pair<String, String>>()
+        val context = buildString {
+            appendLine("SITE EVIDENCE (JSON):")
+            appendLine(job.evidenceJson)
+            if (!result?.luaCode.isNullOrBlank()) {
+                appendLine()
+                appendLine("CURRENT GENERATED LUA:")
+                appendLine("```lua")
+                appendLine(result!!.luaCode)
+                appendLine("```")
+                appendLine("CURRENT LIVE VALIDATION:")
+                if (fails.isEmpty()) appendLine("All supported functions passed.")
+                else fails.forEach { appendLine(" - $it") }
+            }
+        }
+        turns.add("user" to context)
+        synchronized(job.chatHistory) { job.chatHistory.forEach { turns.add(it) } }
+        turns.add("user" to userMessage)
+
+        job.phase = "ai-generate"
+        job.step("💬 chat: ${userMessage.take(80)}")
+        val sys = AiPluginGenerator.systemPrompt() + """
+
+You are now in INTERACTIVE REPAIR CHAT mode for a plugin you generated.
+The human gives feedback ("chapter list uses the wrong container", "search must
+POST", "also parse genres") or asks questions.
+
+When fixing: re-derive selectors/URLs from EVIDENCE only. chapterLinkGroups in
+the evidence lists REAL chapter URLs of this novel — the correct chapter-list
+selector must produce exactly those links. Reply with a short explanation AND
+the FULL corrected Lua in one ```lua block.
+When only asked a question, answer briefly WITHOUT a lua block.
+Never invent endpoints/selectors not present in evidence.""".trimIndent()
+
+        val messages = listOf(mapOf("role" to "system", "content" to sys)) +
+            turns.map { mapOf("role" to it.first, "content" to it.second) }
+
+        job.phase = "ai-validate"
+        val outcome = withTimeoutOrNull(180_000) {
+            chatOnce(provider, model, messages, maxOf(provider.maxTokens, 12_000))
+        } ?: AiClient.Result.Fail("chat timed out after 180s", 0)
+
+        val reply: ChatReply = when (outcome) {
+            is AiClient.Result.Fail -> {
+                synchronized(job.chatHistory) {
+                    job.chatHistory.add("user" to userMessage)
+                    job.chatHistory.add("assistant" to "Error: ${outcome.error.take(300)}")
+                }
+                ChatReply("AI error: ${outcome.error.take(250)}", false, null, null)
+            }
+            is AiClient.Result.Ok -> {
+                val replyText = outcome.text
+                val lua = AiPluginGenerator.extractLua(replyText)
+                var rebuilt = false
+                var pass: Boolean? = null
+                var validation: List<Map<String, Any?>>? = null
+
+                if (lua != null && lua.contains("function")) {
+                    job.step("💬 chat produced corrected Lua (${lua.length} bytes) — re-validating live …")
+                    val probeUrl = job.corpusRef?.pages?.firstOrNull { it.kind == "book" }?.url
+                        ?: job.corpusRef?.baseUrl ?: job.url
+                    val report = withTimeoutOrNull(90_000) {
+                        PluginValidator().validate(lua, job.query, { job.step(it) }, probeUrl)
+                    }?.second
+                    if (report != null) {
+                        rebuilt = true
+                        pass = report.pass
+                        validation = report.entries.map {
+                            mapOf("function" to it.function, "ok" to it.ok,
+                                "detail" to it.detail, "durationMs" to it.durationMs)
+                        }
+                        job.result = GenerationResult(
+                            success = report.pass,
+                            siteUrl = job.url,
+                            blueprint = null,
+                            strategySummary = mapOf("source" to "AI:$model 💬 chat fix"),
+                            validation = report.entries,
+                            overallPass = report.pass,
+                            luaCode = lua,
+                            variantsTried = attemptCount(job) + 1
+                        )
+                        job.attempts.add(AttemptInfo(
+                            attemptCount(job) + 1, "AI:$model 💬", report.pass,
+                            "${report.entries.count { it.ok }}/${report.entries.size} functions pass", lua.length
+                        ))
+                        job.phase = if (report.pass) "done" else "error"
+                        job.error = if (report.pass) null else "Chat-rebuilt plugin did not fully pass"
+                    }
+                }
+                val cleanReply = replyText.replace(Regex("```(?:lua)?[\\s\\S]*?```", RegexOption.IGNORE_CASE), "").trim()
+                synchronized(job.chatHistory) {
+                    job.chatHistory.add("user" to userMessage)
+                    job.chatHistory.add("assistant" to replyText)
+                    while (job.chatHistory.size > 24) job.chatHistory.removeAt(0)
+                }
+                ChatReply(cleanReply.ifBlank { "(no text)" }, rebuilt, pass, validation)
+            }
+        }
+        return reply
+    }
+
+    private suspend fun chatOnce(
+        provider: dev.pluginstudio.gen.ai.ProviderConfig,
+        model: String,
+        messages: List<Map<String, String>>,
+        maxTokens: Int
+    ): AiClient.Result {
+        var last: AiClient.Result? = null
+        val keys = provider.apiKey.split("\n", ";", ",").map { it.trim() }.filter { it.isNotBlank() }.ifEmpty { listOf("") }
+        val cursor = java.util.concurrent.atomic.AtomicInteger(0)
+        for ((i, _) in keys.withIndex()) {
+            val key = keys[(cursor.getAndIncrement() + i) % keys.size]
+            val url = when (provider.mode) {
+                "responses" -> provider.baseUrl.trimEnd('/') + "/responses"
+                else -> provider.baseUrl.trimEnd('/') + "/chat/completions"
+            }
+            val payload: Map<String, Any> = if (provider.mode == "responses")
+                mapOf("model" to model, "input" to messages, "max_output_tokens" to maxTokens)
+            else mapOf("model" to model, "messages" to messages, "max_tokens" to maxTokens)
+
+            val resp = dev.pluginstudio.gen.HttpFetcher().post(
+                url, Gson().toJson(payload), "application/json", timeoutSec = 170,
+                extraHeaders = buildMap {
+                    if (key.isNotBlank()) { put("Authorization", "Bearer $key"); put("x-api-key", key) }
+                    provider.headers.forEach { (k, v) -> put(k, v) }
+                }
+            )
+            if (!resp.ok) {
+                val f = AiClient.Result.Fail("HTTP ${resp.status}: ${resp.body.take(200)}", resp.status)
+                last = f
+                if ((resp.status == 401 || resp.status == 429) && i < keys.size - 1) continue
+                return f
+            }
+            val text = extractChatText(resp.body, provider.mode)
+            if (text != null) { advanceChatCursor(provider.id); return AiClient.Result.Ok(text, model) }
+            last = AiClient.Result.Fail("Could not parse AI response: ${resp.body.take(200)}", resp.status)
+        }
+        return last ?: AiClient.Result.Fail("no API keys", 0)
+    }
+
+    private val chatCursors = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+    private fun advanceChatCursor(id: String) { chatCursors[id]?.incrementAndGet() }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun extractChatText(body: String, mode: String): String? = try {
+        val root = Gson().fromJson(body, Map::class.java) as Map<String, Any>
+        if (mode == "responses") {
+            (root["output_text"] as? String)?.takeIf { it.isNotBlank() } ?: run {
+                val sb = StringBuilder()
+                (root["output"] as? List<*>)?.forEach { item ->
+                    (item as? Map<*, *>)?.get("content")?.let { content ->
+                        (content as? List<*>)?.forEach { c ->
+                            ((c as? Map<*, *>)?.get("text") as? String)?.let { sb.append(it) }
+                        }
+                    }
+                }
+                sb.toString().ifBlank { null }
+            }
         } else {
-            finishError(job, "AI could not produce a usable plugin from the available evidence.")
+            (((root["choices"] as? List<*>)?.firstOrNull() as? Map<*, *>)
+                ?.get("message") as? Map<*, *>)?.get("content") as? String
+        }
+    } catch (_: Exception) { null }
+
+    private fun attemptCount(job: GenJob): Int = synchronized(job.attempts) { job.attempts.size }
+
+    /** Analyze an extra page mid-session and fold it into the stored evidence. */
+    suspend fun analyzeExtraPage(jobId: String, url: String): Map<String, Any?> {
+        val job = jobs[jobId] ?: return mapOf("ok" to false, "error" to "unknown job")
+        val corpus = job.corpusRef ?: return mapOf("ok" to false, "error" to "job has no analysis session — run Analyze & Generate first")
+        return try {
+            val resp = withTimeoutOrNull(35_000) {
+                dev.pluginstudio.gen.HttpFetcher().get(url, timeoutSec = 25)
+            } ?: return mapOf("ok" to false, "error" to "fetch timed out")
+            if (!resp.ok || resp.blocked) return mapOf("ok" to false, "error" to "HTTP ${resp.status} / blocked")
+            val kind = SiteCrawler().classify(url)
+            val snap = dev.pluginstudio.gen.PageSnapshot(
+                url, resp.body, kind,
+                dom = dev.pluginstudio.analyzer.DomAnalyzer().analyze(url, resp.body),
+                js = try {
+                    dev.pluginstudio.analyzer.SiteAnalyzer(maxExternalScripts = 2).analyzeHtml(url, resp.body)
+                } catch (_: Exception) { null }
+            )
+            synchronized(corpus.pages) {
+                corpus.pages.removeAll { it.url == url }
+                corpus.pages.add(snap)
+            }
+            val fresh = EvidenceBuilder.toJson(EvidenceBuilder.build(corpus, emptyList(), job.query))
+            job.evidenceJson = fresh
+            mapOf("ok" to true, "kind" to kind, "bytes" to resp.body.length, "evidenceBytes" to fresh.length)
+        } catch (e: Exception) {
+            mapOf("ok" to false, "error" to (e.message ?: e.toString()))
         }
     }
 
-    private suspend fun listModels(provider: dev.pluginstudio.gen.ai.ProviderConfig): List<String> =
-        AiClient().listModels(provider).first
+    // ── export ──
 
     /** Stage generated lua under <repoRoot>/generated/ai/<jobId>.lua */
     fun stage(jobId: String): String? {
@@ -267,7 +493,6 @@ class GeneratorService(
             ?: return mapOf("ok" to false, "error" to "job has no result")
         if (result.luaCode.isBlank()) return mapOf("ok" to false, "error" to "empty lua code")
 
-        // Derive id/name from the Lua metadata itself (AI sets them properly).
         fun meta(key: String): String =
             Regex("""^\s*$key\s*=\s*"([^"]*)"""", RegexOption.MULTILINE)
                 .find(result.luaCode)?.groupValues?.get(1).orEmpty()

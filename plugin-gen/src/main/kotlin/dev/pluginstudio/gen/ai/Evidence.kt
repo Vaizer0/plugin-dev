@@ -63,6 +63,13 @@ object EvidenceBuilder {
                     mapOf("url" to s(e.url, 110), "category" to e.category.name, "conf" to e.confidence, "src" to e.source)
                 }
                 if (eps.isNotEmpty()) put("jsEndpoints", eps)
+
+                // Real chapter-anchor groups on book pages: selector + sample URLs
+                // so the model can pick a selector that yields THIS novel's chapters.
+                if (p.kind == "book") {
+                    val groups = chapterLinkGroups(doc)
+                    if (groups.isNotEmpty()) put("chapterLinkGroups", groups)
+                }
             }
         }
 
@@ -91,4 +98,54 @@ object EvidenceBuilder {
 
     fun toJson(evidence: Map<String, Any?>): String =
         gson().toJson(evidence)
+
+    /**
+     * Group chapter-ish anchors by their parent container selector and return
+     * the top groups with real sample URLs (max 3 each). This gives the model
+     * ground truth about which container holds THIS novel's chapter list.
+     */
+    private fun chapterLinkGroups(doc: org.jsoup.nodes.Document): List<Map<String, Any?>> {
+        val chapterRe = Regex("chapter|/chap|/ch-?\\d|глава|/read-", RegexOption.IGNORE_CASE)
+        val tally = LinkedHashMap<String, Triple<Int, Int, MutableList<String>>>() // sel -> (total, samePrefix, samples)
+        val anchors = doc.select("a[href]").filter { chapterRe.containsMatchIn(it.attr("href")) }
+        if (anchors.size < 3) return emptyList()
+        for (a in anchors.take(80)) {
+            var el: org.jsoup.nodes.Element? = a
+            repeat(3) {
+                el = el?.parent() ?: return@repeat
+                val p = el ?: return@repeat
+                if (p.tagName() !in listOf("ul", "div", "ol", "tbody", "table")) return@repeat
+                val id = p.id()
+                val classes = p.classNames()
+                val sel = when {
+                    id.isNotBlank() -> "#$id a"
+                    classes.isNotEmpty() -> p.tagName() + "." + classes.joinToString(".") + " a"
+                    else -> return@repeat
+                }
+                val href = a.attr("abs:href").ifBlank { a.attr("href") }
+                if (href.isBlank()) return@repeat
+                // same-novel prefix = href minus its last path segment
+                val prefix = href.substringBeforeLast('/')
+                val entry = tally.getOrPut(sel) { Triple(0, 0, mutableListOf()) }
+                var total = entry.first + 1
+                var same = entry.second + (if (doc.select(sel).any { x ->
+                    x.attr("abs:href").ifBlank { x.attr("href") }.startsWith(prefix)
+                }) 1 else 0)
+                val samples = entry.third
+                if (samples.size < 3 && !samples.contains(href)) samples.add(href)
+                tally[sel] = Triple(total, same, samples)
+            }
+        }
+        return tally.entries
+            .sortedByDescending { (_, v) -> v.second * 2 + v.first }
+            .take(4)
+            .map { (sel, v) ->
+                mapOf(
+                    "selector" to s(sel, 80),
+                    "chapterAnchors" to v.first,
+                    "sameNovelCount" to v.second,
+                    "sampleUrls" to v.third.take(3).map { s(it, 120) }
+                )
+            }
+    }
 }

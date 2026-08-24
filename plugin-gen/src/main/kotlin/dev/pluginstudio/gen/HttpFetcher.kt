@@ -56,8 +56,14 @@ class HttpFetcher(
         return direct
     }
 
-    suspend fun post(url: String, body: String?, contentType: String = "application/x-www-form-urlencoded", timeoutSec: Int = 25): Response =
-        request("POST", url, body?.toByteArray(), mapOf("Content-Type" to contentType), timeoutSec)
+    suspend fun post(
+        url: String,
+        body: String?,
+        contentType: String = "application/x-www-form-urlencoded",
+        timeoutSec: Int = 25,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): Response = request("POST", url, body?.toByteArray(),
+        mapOf("Content-Type" to contentType) + extraHeaders, timeoutSec)
 
     @Volatile private var curlChecked: Boolean? = null
     private fun curlAvailable(): Boolean {

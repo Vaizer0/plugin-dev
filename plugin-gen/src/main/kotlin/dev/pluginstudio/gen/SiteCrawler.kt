@@ -25,7 +25,7 @@ class SiteCrawler(
         val blocked: Boolean = false,
         val error: String? = null,
         val baseUrl: String = "",
-        val pages: List<PageSnapshot> = emptyList()
+        val pages: MutableList<PageSnapshot> = mutableListOf()
     )
 
     suspend fun crawl(
@@ -127,7 +127,7 @@ class SiteCrawler(
         val snaps = pages.map { (url, html, _) ->
             snapshot(url, html, classify(url), Jsoup.parse(html, url), viaBrowser = true)
         }
-        return CrawlResult(true, baseUrl = base, pages = snaps)
+        return CrawlResult(true, baseUrl = base, pages = snaps.toMutableList())
     }
 
     private fun snapshot(url: String, html: String, kind: String, doc: Document, viaBrowser: Boolean = false): PageSnapshot {

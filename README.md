@@ -139,7 +139,13 @@ Real Lua Validation (live)    →   AI Repair (≤3 rounds) →   Validated Nove
    engine and every function runs against the target site. Failures are fed back
    to the model for repair (max 3 attempts). A plugin counts as success only when
    catalog/chapters/content actually work.
-4. **Save/export** — stage locally, then "Save to library" copies it into your
+4. **💬 Interactive repair chat** — after generation, chat directly with the AI
+   about the plugin ("chapter list uses the wrong container", "search must POST").
+   It sees the full evidence (including real chapter URL samples per candidate
+   selector), the current Lua and live validation results; any corrected Lua it
+   returns is automatically re-validated live. You can also feed extra pages into
+   the evidence on demand.
+5. **Save/export** — stage locally, then "Save to library" copies it into your
    NoveLA sources folder, updates `index.yaml`, and reloads the Plugins list.
 
 Measured: libread.com end-to-end in ~150s (attempt 1: 7/9 → repair → attempt 2: 8/9 PASS).
@@ -203,6 +209,7 @@ plugin-dev-studio/
 | AI error 429 FreeUsageLimitError | Keyless quota exhausted for that model; wait, switch model in Settings, or add a key. |
 | "chapter list rendered client-side" | SPA site: server HTML has no chapters → use capture flow. |
 | Generation slow (>2 min) | Free reasoning models can be slow; pick a faster model in Settings. |
+| Chat says "chapter list wrong" fixed but still 0 | Make sure you analyzed the right book page — use ➕ Analyze extra page in the chat panel. |
 
 ## Roadmap
 
