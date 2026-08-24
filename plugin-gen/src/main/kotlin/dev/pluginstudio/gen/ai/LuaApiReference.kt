@@ -138,6 +138,8 @@ Misc:
   then select the content node, then normalize whitespace.
 - Pagination: catalog page number = index + 1 (append ?page= or /page/N/ as the site uses).
 - Emit selectors as literal strings inside each function so tooling can display them.
+- icon: standard Novela favicon template on the BASE domain only (strip any path):
+    icon = "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://<domain>&size=256"
 - NEVER require authentication, cookies from the developer, or endpoints not present in evidence.
 """
 }

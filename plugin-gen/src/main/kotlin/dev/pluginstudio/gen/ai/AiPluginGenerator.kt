@@ -28,8 +28,9 @@ STRICT RULES:
 2. Prefer VERIFIED JSON APIs (listed under verifiedApis) over HTML scraping whenever they cover a capability.
 3. Use only the engine builtins documented below — do not invent functions.
 4. Generate metadata + getCatalogList + getCatalogSearch (when search evidence exists) + book details + chapter list (or parsePage) + getChapterText, covering every capability the evidence supports.
-5. Strip ads/noise in getChapterText and normalize whitespace.
-6. Output EXACTLY ONE complete Lua source in a single ```lua code block, no explanations before/after.
+5. ICON: always set the top-level `icon` variable. Use evidence.siteIconObserved if present; otherwise use evidence.iconSuggestion verbatim (standard Novela favicon template on the base domain — never include a path).
+6. Strip ads/noise in getChapterText and normalize whitespace.
+7. Output EXACTLY ONE complete Lua source in a single ```lua code block, no explanations before/after.
 
 """ + LuaApiReference.text()
 

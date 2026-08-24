@@ -500,6 +500,7 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
         val id = meta("id").ifBlank { "ai_$jobId" }.replace(Regex("[^a-zA-Z0-9_]"), "_").take(48)
         val name = meta("name").ifBlank { id }
         val lang = meta("language").ifBlank { "en" }
+        val icon = meta("icon")
 
         val langDir = libraryDir.resolve(lang)
         Files.createDirectories(langDir)
@@ -513,6 +514,7 @@ Never invent endpoints/selectors not present in evidence.""".trimIndent()
             appendLine("    name: \"$name\"")
             appendLine("    version: \"1.0.0\"")
             appendLine("    url: \"file://${target.toAbsolutePath()}\"")
+            if (icon.isNotBlank()) appendLine("    icon: \"$icon\"")
             appendLine("    language: \"$lang\"")
         }.trimEnd('\n') + "\n"
         if (Files.exists(indexFile)) {

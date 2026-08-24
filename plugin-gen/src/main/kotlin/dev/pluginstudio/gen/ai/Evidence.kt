@@ -84,8 +84,19 @@ object EvidenceBuilder {
             }
         }
 
+        // Standard Novela icon: Google favicon service on the BASE domain only.
+        val host = try { java.net.URI(corpus.baseUrl).host ?: "" } catch (_: Exception) { "" }
+        val iconSuggestion = "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://$host&size=256"
+        val ogIcon = corpus.pages.firstOrNull { it.kind == "home" }?.html?.let { html ->
+            Regex("""<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.get(1)
+        }
+
         return mapOf(
             "baseUrl" to corpus.baseUrl,
+            "baseDomain" to host,
+            "iconSuggestion" to iconSuggestion,
+            "siteIconObserved" to ogIcon?.let { s(it, 160) },
             "searchQueryTested" to searchQuery,
             "pages" to pages,
             "verifiedApis" to apiList,
