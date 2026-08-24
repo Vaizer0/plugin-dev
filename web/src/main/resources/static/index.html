@@ -1070,15 +1070,17 @@ function mountNewPlugin(c) {
       <div class="field" style="flex:1;min-width:180px"><label>Plugin ID</label><input type="text" id="npId" oninput="npValidate()"></div>
       <div class="field" style="width:160px"><label>Search query</label><input type="text" id="npQuery" value="novel"></div>
     </div>
-    <div class="row" style="margin-bottom:16px">
-      <div class="field" style="width:210px"><label>AI Provider</label>
-        <select id="npProvider" onchange="onProviderChange()" style="width:100%"></select>
+    <details open style="margin-bottom:14px"><summary style="font-weight:600">🤖 Step 2 · AI engine</summary>
+    <div style="padding-top:10px">
+      <div class="row">
+        <div class="field" style="width:220px;margin-bottom:0"><label>Provider</label>
+          <select id="npProvider" onchange="onProviderChange()" style="width:100%"></select></div>
+        <div class="field" style="flex:1;margin-bottom:0"><label>Model</label>
+          <input type="text" id="npModel" list="modelList" placeholder="provider default" oninput="this.dataset.touched='1'">
+          <datalist id="modelList"></datalist></div>
       </div>
-      <div class="field" style="flex:1;min-width:220px"><label>AI Model</label>
-        <input type="text" id="npModel" list="modelList" placeholder="auto (first available)">
-        <datalist id="modelList"></datalist>
-      </div>
-    </div>
+      <button class="btn ghost text" style="font-size:11px;padding:2px 8px" onclick="openAiSettings()">⚙ Configure providers…</button>
+    </div></details>
     <div class="row" style="margin-bottom:16px">
       <button class="btn filled" id="npBtn" disabled onclick="startGenerate()">Analyze &amp; Generate Plugin</button>
       <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--on-surface-var)">
