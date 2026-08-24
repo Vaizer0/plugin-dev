@@ -177,19 +177,33 @@ class GeneratorService(
         var prevFailures: List<String> = emptyList()
         var attemptNo = 0
         var best: GenerationResult? = null
+        var consecutiveTimeouts = 0
+        val aiBudgetStart = System.nanoTime()
 
         while (attemptNo < 3) {
+            // Overall wall-clock guard for the whole AI phase (~4 min).
+            if ((System.nanoTime() - aiBudgetStart) / 1_000_000_000 > 240) {
+                finishError(job, "AI phase exceeded its 4-minute budget — try a faster model/provider or the capture flow.")
+                return
+            }
             attemptNo++
             job.phase = "ai-generate"
-            job.step("AI attempt $attemptNo/3 via $model …")
-            val outcome = withTimeoutOrNull(180_000) {
+            val perCallTimeout = if (consecutiveTimeouts >= 1) 100_000L else 170_000L
+            job.step("AI attempt $attemptNo/3 via $model (${perCallTimeout/1000}s budget) …")
+            val outcome = withTimeoutOrNull(perCallTimeout) {
                 aiGen.generate(provider, model, AiPluginGenerator.GenerationCall(evidenceJson, prevLua, prevFailures))
             }
             if (outcome == null) {
-                job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, "AI call timed out after 180s", 0))
-                job.step("✗ AI call timed out after 180s")
+                consecutiveTimeouts++
+                job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, "AI call timed out", 0))
+                job.step("✗ AI call timed out")
+                if (consecutiveTimeouts >= 2) {
+                    finishError(job, "Model timed out twice in a row — it is too slow right now. Pick another model in ⚙ AI Settings.")
+                    return
+                }
                 continue
             }
+            consecutiveTimeouts = 0
             if (!outcome.first.ok) {
                 job.attempts.add(AttemptInfo(attemptNo, "AI:$model", false, outcome.first.message, 0))
                 job.step("✗ ${outcome.first.message.take(160)}")

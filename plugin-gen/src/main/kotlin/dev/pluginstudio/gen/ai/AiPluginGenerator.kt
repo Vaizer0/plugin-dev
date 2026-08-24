@@ -29,7 +29,7 @@ STRICT RULES:
 3. Use only the engine builtins documented below — do not invent functions.
 4. Generate metadata + getCatalogList + getCatalogSearch (when search evidence exists) + book details + chapter list (or parsePage) + getChapterText, covering every capability the evidence supports.
 5. ICON: always set the top-level `icon` variable. Use evidence.siteIconObserved if present; otherwise use evidence.iconSuggestion verbatim (standard Novela favicon template on the base domain — never include a path).
-6. Strip ads/noise in getChapterText and normalize whitespace.
+6. Keep code COMPACT: short section comments only — less output = faster & fewer token overruns. and normalize whitespace.
 7. Output EXACTLY ONE complete Lua source in a single ```lua code block, no explanations before/after.
 
 """ + LuaApiReference.text()
@@ -75,7 +75,10 @@ STRICT RULES:
             }
             when (val r = client.complete(provider, model, systemPrompt(), user)) {
                 is AiClient.Result.Ok -> {
-                    val lua = extractLua(r.text)
+                    val lua = extractLua(r.text)?.let { code ->
+                        // light deterministic cleanup
+                        code.replace("\uFEFF", "").trimIndent().trim() + "\n"
+                    }
                         ?: return@withContext Result2(false, "AI replied without usable Lua (${r.text.length} chars)") to r.text
                     Result2(true, "ok") to lua
                 }
