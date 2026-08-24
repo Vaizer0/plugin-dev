@@ -1124,17 +1124,16 @@ function mountNewPlugin(c) {
       <summary>🔒 Protected site (Cloudflare)? Capture it from your own browser →</summary>
       <div class="card" style="margin-top:8px">
         <ol style="font-size:12px;color:var(--on-surface-var);margin:4px 0 10px;padding-left:20px;line-height:1.7">
-          <li>Create two bookmarks with these URLs (copy buttons below).</li>
+          <li>Create a bookmark named <b>PDS Capture</b> and paste the code below as its URL.</li>
           <li>Open the protected site in this browser and pass verification.</li>
-          <li>Tap <b>PDS Recorder</b> once — it arms request capture for that tab.</li>
-          <li>Visit pages normally: catalog, search results, one book, one chapter.</li>
-          <li>After each visited page tap <b>PDS Send</b> to push DOM + captured network requests here. Re-arm the recorder after full page navigations.</li>
-          <li>Come back here, tick “Use captured pages”, and run Analyze &amp; Generate.</li>
+          <li>Tap the <b>PDS Capture</b> bookmark once — a badge appears bottom-right; request capture is armed for the tab.</li>
+          <li>Just browse normally: catalog → search → one book → one chapter.<br><b>Every page you leave auto-sends itself here</b> (badge shows ✉). No manual sending per page.</li>
+          <li>Return here, tick “Use captured pages”, run Analyze &amp; Generate.</li>
         </ol>
         <div class="row">
-          <button class="btn" onclick="copyBm('rec')">Copy PDS Recorder</button>
-          <button class="btn" onclick="copyBm('snd')">Copy PDS Send</button>
+          <button class="btn filled" onclick="copyBm()">📋 Copy PDS Capture code</button>
           <button class="btn ghost text" onclick="clearCaptured()">Clear captured</button>
+          <span id="bmCopied2" class="ok-text" style="font-size:11px"></span>
         </div>
         <div class="muted mono" id="capturedList" style="font-size:11px;margin-top:8px">no pages captured yet</div>
       </div>
@@ -1142,28 +1141,48 @@ function mountNewPlugin(c) {
   </div></div>`;
   refreshCaptured();
 }
-const BM_REC = "javascript:(function(){if(window.__pdsRec){alert('Recorder already armed');return}window.__pdsRec=[];" +
+/* Single live-capture bookmarklet: arms fetch/XHR wrappers + persistent overlay
+   badge; auto-sends each page on leave via sendBeacon (small pages); manual
+   “✉ send now” for big/SPA pages. sessionStorage keeps the buffer across
+   normal navigations in the same tab. */
+const BM_CAPTURE =
+  "javascript:(function(){var S='http://localhost:8080';" +
+  "if(window.__pds){alert('PDS already armed on this page');return}" +
+  "window.__pds={buf:[]};try{window.__pds.buf=JSON.parse(sessionStorage.getItem('__pdsB')||'[]')}catch(e){}" +
+  "var save=function(){try{sessionStorage.setItem('__pdsB',JSON.stringify(window.__pds.buf))}catch(e){}};" +
+  "function payload(){" +
+  "  var reqs=window.__pds.buf.splice(0,window.__pds.buf.length);" +
+  "  return {url:location.href,html:'<!DOCTYPE html>'+document.documentElement.outerHTML,requests:reqs};}" +
+  "window.__pdsSend=function(){try{" +
+  "  var d=JSON.stringify(payload());save();" +
+  "  fetch(S+'/api/capture/page',{method:'POST',headers:{'Content-Type':'application/json'},body:d})" +
+  "  .then(function(r){return r.json()}).then(function(j){alert('Sent! Studio holds '+j.pagesReceived+' captured page(s).')})" +
+  "  .catch(function(e){alert('Fail: '+e)})}catch(e){alert('Send failed: '+e)}};" +
   "var of=window.fetch;window.fetch=function(){var u=arguments[0];try{u=(typeof u==='string')?u:u.url}catch(e){}" +
-  "var e={m:'GET',u:String(u),s:0};window.__pdsRec.push(e);" +
-  "return of.apply(this,arguments).then(function(r){e.s=r.status;return r})};" +
+  "var e={method:'GET',url:String(u),status:0};window.__pds.buf.push(e);save();" +
+  "return of.apply(this,arguments).then(function(r){e.status=r.status;return r})};" +
   "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){this.__m=m;this.__u=u;oo.apply(this,arguments)};" +
   "var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){var x=this;" +
-  "this.addEventListener('load',function(){try{window.__pdsRec.push({m:x.__m,u:x.__u,s:x.status})}catch(e){}});os.apply(this,arguments)};" +
-  "alert('PDS Recorder armed — browse pages now, then use PDS Send.')})()";
-const BM_SND = "javascript:(function(){" +
-  "var recs=(window.__pdsRec||[]).map(function(r){return{method:r.m,url:r.u,status:r.s}});" +
-  "fetch('http://localhost:8080/api/capture/page',{method:'POST',headers:{'Content-Type':'application/json'}," +
-  "body:JSON.stringify({url:location.href,html:'<!DOCTYPE html>'+document.documentElement.outerHTML,requests:recs})})" +
-  ".then(function(r){return r.json()}).then(function(j){j.success===false?alert('Error: '+j.error):" +
-  "alert('Sent! Studio now holds '+j.pagesReceived+' captured page(s).')})" +
-  ".catch(function(e){alert('Cannot reach localhost:8080 — '+e)})})();";
-function copyBm(kind) {
-  const code = kind === 'rec' ? BM_REC : BM_SND;
+  "this.addEventListener('load',function(){try{window.__pds.buf.push({method:x.__m,url:x.__u,status:x.status});save()}catch(e){}});os.apply(this,arguments)};" +
+  "window.addEventListener('pagehide',function(){try{" +
+  "  var p={url:location.href,html:document.documentElement.outerHTML.slice(0,400000),requests:window.__pds.buf};" +
+  "  var d=JSON.stringify(p);if(d.length>500000)return;" +
+  "  navigator.sendBeacon(S+'/api/capture/beacon',d);window.__pds.buf=[];save();}catch(e){}});" +
+  "var badge=document.createElement('div');" +
+  "badge.style.cssText='position:fixed;bottom:12px;right:12px;z-index:2147483647;background:#111;color:#7CFC00;padding:6px 10px;border-radius:8px;font:bold 12px monospace;opacity:.85;box-shadow:0 2px 8px rgba(0,0,0,.5)';" +
+  "function upd(){badge.innerHTML='PDS ● '+window.__pds.buf.length+' reqs · <span id=__pdss style=cursor:pointer;text-decoration:underline>✉ send now</span>';" +
+  "  var s=badge.querySelector('#__pdss');s.onclick=function(ev){ev.stopPropagation();window.__pdsSend()};}" +
+  "upd();setInterval(upd,1000);" +
+  "(function w(){if(document.body){document.body.appendChild(badge)}else{setTimeout(w,50)}})();" +
+  "alert('PDS armed ✓ Browse catalog/search/book/chapter — pages auto-send on leave. Keep this tab open.')})();"
+
+function copyBm() {
   const ta = document.createElement('textarea');
-  ta.value = code; document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); } catch {}
+  ta.value = BM_CAPTURE; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); const el=$('#bmCopied2'); if(el){el.textContent='copied ✓'; setTimeout(function(){const e2=$('#bmCopied2'); if(e2)e2.textContent='';},2000);} } catch {}
   ta.remove();
 }
+
 async function refreshCaptured() {
   try {
     const list = await api('/api/capture/list');
@@ -1303,6 +1322,7 @@ async function saveToLibrary(jobId) {
   navTo('PLUGINS');
   pollLogs();
   setInterval(pollLogs, 1500);
+  setInterval(function(){ if ($('#capturedList')) refreshCaptured(); }, 2500);
 })();
 </script>
 </body>

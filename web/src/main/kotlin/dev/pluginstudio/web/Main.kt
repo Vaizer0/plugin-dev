@@ -787,6 +787,37 @@ class WebStudio(
                 call.respondText("", ContentType.Text.Plain, HttpStatusCode.NoContent)
             }
 
+            // navigator.sendBeacon target (fires on pagehide; content-type is text/plain)
+            post("/api/capture/beacon") {
+                call.response.headers.append("Access-Control-Allow-Origin", "*")
+                val raw = call.receiveText()
+                if (raw.isBlank()) {
+                    call.respondJson(mapOf("success" to false, "error" to "empty body"), HttpStatusCode.BadRequest)
+                    return@post
+                }
+                val body = parseBody(raw)
+                val url = body["url"]?.toString()?.trim().orEmpty()
+                val html = body["html"]?.toString().orEmpty()
+                if (url.isBlank() || html.isBlank()) {
+                    call.respondJson(mapOf("success" to false), HttpStatusCode.BadRequest)
+                    return@post
+                }
+                @Suppress("UNCHECKED_CAST")
+                val reqs = (body["requests"] as? List<Any>)?.mapNotNull { r ->
+                    (r as? Map<String, Any>)?.let { m ->
+                        NetRecord(
+                            method = m["method"]?.toString() ?: "GET",
+                            url = m["url"]?.toString() ?: "",
+                            status = (m["status"] as? Number)?.toInt() ?: 0,
+                            contentType = m["contentType"]?.toString() ?: "",
+                            bodySample = ""
+                        )
+                    }
+                }.orEmpty()
+                val count = generator.capturePage(url, html, reqs)
+                call.respondJson(mapOf("success" to true, "pagesReceived" to count))
+            }
+
             post("/api/capture/page") {
                 call.response.headers.append("Access-Control-Allow-Origin", "*")
                 val body = parseBody(call.receiveText())
